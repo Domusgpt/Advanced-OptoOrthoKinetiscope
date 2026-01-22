@@ -1,5 +1,12 @@
 import { CapturePoint, CalibrationData, Vector3, Quaternion } from "../types";
 import { get24CellVertices, rotate4D_Hyper, project4Dto2D } from "./cpeMath";
+import {
+  createVelocityNomogram, drawNomogram,
+  generateLogPolarGrating, generateCircularGrating,
+  drawQuaternionMoire, drawDifferentialFlowField,
+  computeLinearMoire, Nomogram
+} from "./MoireEngine";
+import { quaternionToRotor, rotorToAxisAngle } from "./GeometricAlgebra";
 
 // --- COLOR PALETTE (Strict Data Semantics) ---
 const C_SENSOR = "#FACC15"; // Gold (Inertial/Lattice) - The "Dead Reckoning"
@@ -214,6 +221,262 @@ function drawVelocityRail(
 }
 
 /**
+ * SYSTEM 4: VELOCITY NOMOGRAM (Analog Calculator for Vision LLM)
+ * Replaces textual speed estimates with a geometric readout
+ * The AI draws a mental line between Time and Distance to read Speed
+ */
+function drawVelocityNomogramPanel(
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number,
+    captures: CapturePoint[]
+) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Create nomogram with current data
+    const nomogram = createVelocityNomogram([16, 1000], [0.1, 10]);
+
+    // Calculate time delta from captures
+    if (captures.length >= 2) {
+        const timeDeltaMs = captures[captures.length - 1].relativeTime - captures[0].relativeTime;
+        nomogram.currentA = Math.max(16, Math.min(1000, timeDeltaMs));
+
+        // Estimate distance from acceleration magnitude
+        const avgAccel = captures.reduce((sum, c) => {
+            const mag = Math.sqrt(c.acceleration.x**2 + c.acceleration.y**2 + c.acceleration.z**2);
+            return sum + mag;
+        }, 0) / captures.length;
+
+        // Very rough distance estimate: d = 0.5 * a * t^2
+        const tSec = timeDeltaMs / 1000;
+        const estDistance = 0.5 * avgAccel * tSec * tSec;
+        nomogram.currentB = Math.max(0.1, Math.min(10, estDistance));
+
+        // Compute result
+        nomogram.computedC = (nomogram.currentB / (nomogram.currentA / 1000));
+    }
+
+    // Draw the nomogram
+    drawNomogram(ctx, 0, 0, w, h, nomogram, {
+        bg: 'rgba(15, 23, 42, 0.9)',
+        scale: '#94a3b8',
+        line: '#FACC15',
+        marker: '#F43F5E'
+    });
+
+    // Title
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('VELOCITY NOMOGRAM', w/2, h - 5);
+
+    ctx.restore();
+}
+
+/**
+ * SYSTEM 5: MOIRÉ QUATERNION DISPLAY
+ * Visualizes orientation as overlapping gratings
+ * The beat pattern encodes rotation - Vision LLM reads fringe shift
+ */
+function drawMoireQuaternionDisplay(
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number,
+    orientation: Quaternion,
+    referenceOrientation: Quaternion | null
+) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Background
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = '#334155';
+    ctx.strokeRect(0, 0, w, h);
+
+    // Draw quaternion moiré
+    drawQuaternionMoire(
+        ctx, 5, 15, w - 10, h - 30,
+        orientation.w, orientation.x, orientation.y, orientation.z,
+        referenceOrientation
+    );
+
+    // Extract rotation info for label
+    const rotor = quaternionToRotor(orientation);
+    const { axis, angle } = rotorToAxisAngle(rotor);
+    const degrees = (angle * 180 / Math.PI).toFixed(1);
+
+    // Title
+    ctx.fillStyle = '#22D3EE';
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('ORIENTATION MOIRÉ', w/2, 12);
+
+    ctx.restore();
+}
+
+/**
+ * SYSTEM 6: DIFFERENTIAL FLOW FIELD
+ * Yellow = Expected (gyro), Cyan = Observed (optical)
+ * Rose difference = Subject Motion isolated from camera motion
+ */
+function drawDifferentialFlow(
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number,
+    cap: CapturePoint
+) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Compute expected flow from gyro (rotation rate)
+    // Rotation causes apparent motion opposite to rotation direction
+    const expectedFlow = {
+        x: -cap.rotationRate.y * 0.01,  // Yaw causes horizontal flow
+        y: cap.rotationRate.x * 0.01    // Pitch causes vertical flow
+    };
+
+    // For now, observed flow is simulated as expected + noise
+    // In real implementation, this would come from optical flow analysis
+    const observedFlow = {
+        x: expectedFlow.x + (Math.random() - 0.5) * 0.5,
+        y: expectedFlow.y + (Math.random() - 0.5) * 0.5
+    };
+
+    drawDifferentialFlowField(ctx, 0, 0, w, h, expectedFlow, observedFlow, 30);
+
+    // Title
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 9px monospace';
+    ctx.fillText('DIFFERENTIAL FLOW', 5, 12);
+
+    ctx.restore();
+}
+
+/**
+ * SYSTEM 7: LOG-POLAR GRATING OVERLAY
+ * Encodes rotation/scale as overlapping spiral patterns
+ * Fringe shift = complex multiplication result
+ */
+function drawLogPolarOverlay(
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number,
+    orientation: Quaternion,
+    zoomLevel: number
+) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Reference grating (identity orientation)
+    ctx.globalAlpha = 0.3;
+    generateLogPolarGrating(ctx, 0, 0, w, h, {
+        frequency: 6,
+        phase: 0,
+        centerX: w/2,
+        centerY: h/2
+    }, '#FACC15');
+
+    // Current orientation grating (phase shifted by quaternion)
+    const rotor = quaternionToRotor(orientation);
+    const { angle } = rotorToAxisAngle(rotor);
+
+    generateLogPolarGrating(ctx, 0, 0, w, h, {
+        frequency: 6,
+        phase: angle,  // Phase encodes rotation
+        centerX: w/2,
+        centerY: h/2
+    }, '#22D3EE');
+
+    ctx.globalAlpha = 1.0;
+
+    // Moiré beat information
+    const moire = computeLinearMoire(
+        { frequency: 6, angle: 0 },
+        { frequency: 6, angle: angle }
+    );
+
+    ctx.fillStyle = '#F43F5E';
+    ctx.font = '9px monospace';
+    ctx.fillText(`MAG: ${moire.magnification.toFixed(1)}x`, 5, h - 5);
+
+    ctx.restore();
+}
+
+/**
+ * SYSTEM 8: STADIMETRIC FLOOR GRID
+ * Projects a reference grid on the floor plane
+ * Grid cell size = 1 meter (calibrated to user height)
+ * Vision LLM counts cells to measure distance
+ */
+function drawStadimetricGrid(
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number,
+    cap: CapturePoint,
+    deviceHeightCm: number
+) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Compute pitch from quaternion
+    const q = cap.orientation;
+    const pitch = Math.asin(2 * (q.w * q.y - q.z * q.x));
+
+    // Only draw if looking down (negative pitch)
+    if (pitch > 0.1) {
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '9px monospace';
+        ctx.fillText('LOOKING UP - NO FLOOR', w/2 - 50, h/2);
+        ctx.restore();
+        return;
+    }
+
+    const deviceHeightM = deviceHeightCm / 100;
+    const fov = 60 * Math.PI / 180;  // Assume 60° FOV
+
+    // Draw perspective grid
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.4)';
+    ctx.lineWidth = 1;
+
+    // Horizon line (based on pitch)
+    const horizonY = h/2 + pitch * (h / fov);
+
+    // Draw converging lines to horizon
+    const vanishingX = w/2;
+    const numLines = 10;
+
+    for (let i = -numLines; i <= numLines; i++) {
+        const baseX = w/2 + i * (w / numLines);
+        ctx.beginPath();
+        ctx.moveTo(baseX, h);
+        ctx.lineTo(vanishingX, Math.max(0, horizonY));
+        ctx.stroke();
+    }
+
+    // Horizontal lines (perspective scaled)
+    for (let d = 1; d <= 5; d++) {
+        // Distance d meters
+        const screenY = horizonY + (h - horizonY) * (deviceHeightM / d);
+
+        if (screenY > 0 && screenY < h) {
+            ctx.beginPath();
+            ctx.moveTo(0, screenY);
+            ctx.lineTo(w, screenY);
+            ctx.stroke();
+
+            // Label distance
+            ctx.fillStyle = '#FACC15';
+            ctx.font = '8px monospace';
+            ctx.fillText(`${d}m`, 5, screenY - 2);
+        }
+    }
+
+    // Title
+    ctx.fillStyle = '#FACC15';
+    ctx.font = 'bold 9px monospace';
+    ctx.fillText('STADIMETRIC GRID', 5, 12);
+
+    ctx.restore();
+}
+
+/**
  * MAIN COMPOSITOR
  */
 async function createTrileticComposite(
@@ -298,6 +561,39 @@ async function createTrileticComposite(
 
     // 4. THE VELOCITY RAIL
     drawVelocityRail(ctx, 60, outH - 30, outW - 120, captures);
+
+    // 5. MOIRÉ VISUALIZATION PANELS (Right side strip)
+    const moirePanelW = 120;
+    const moirePanelH = (outH - 60) / 3;
+
+    // Reference orientation (first capture) for moiré comparison
+    const refOrientation = captures.length > 0 ? captures[0].orientation : null;
+    const currentOrientation = captures.length > 0 ? captures[captures.length - 1].orientation : { w: 1, x: 0, y: 0, z: 0 };
+    const currentCapture = captures.length > 0 ? captures[captures.length - 1] : null;
+
+    // Draw the moiré panels on the right edge
+    if (currentCapture) {
+        // Panel 1: Quaternion Moiré
+        drawMoireQuaternionDisplay(
+            ctx, outW - moirePanelW - 5, 5,
+            moirePanelW, moirePanelH,
+            currentOrientation, refOrientation
+        );
+
+        // Panel 2: Log-Polar Overlay
+        drawLogPolarOverlay(
+            ctx, outW - moirePanelW - 5, moirePanelH + 10,
+            moirePanelW, moirePanelH,
+            currentOrientation, currentCapture.zoomLevel
+        );
+
+        // Panel 3: Velocity Nomogram
+        drawVelocityNomogramPanel(
+            ctx, outW - moirePanelW - 5, 2 * moirePanelH + 15,
+            moirePanelW, moirePanelH - 20,
+            captures
+        );
+    }
 
     // 5. SIDE LABELS
     const labels = [
