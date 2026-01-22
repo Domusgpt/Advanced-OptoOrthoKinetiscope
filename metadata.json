@@ -1,0 +1,7 @@
+{
+  "name": "Copy of Copy of kinoptoscope",
+  "description": "A commercial-grade motion analysis tool using tri-phase photography and accelerometer telemetry to estimate object speed and trajectory via Gemini Vision.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
