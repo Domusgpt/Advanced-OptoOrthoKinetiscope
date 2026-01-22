@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Advanced OptoOrthoKinetiscope - Phillips Gate Quantum Simulator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+      color: #e2e8f0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .hero {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      text-align: center;
+    }
+    .logo {
+      font-size: 64px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      color: #FACC15;
+      font-size: clamp(28px, 5vw, 48px);
+      font-weight: 700;
+      margin-bottom: 10px;
+      text-shadow: 0 0 30px rgba(250, 204, 21, 0.3);
+    }
+    .subtitle {
+      color: #22D3EE;
+      font-size: clamp(16px, 3vw, 24px);
+      margin-bottom: 30px;
+      font-weight: 300;
+    }
+    .description {
+      max-width: 700px;
+      color: #94a3b8;
+      font-size: 16px;
+      line-height: 1.7;
+      margin-bottom: 40px;
+    }
+    .cta-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      justify-content: center;
+      margin-bottom: 60px;
+    }
+    .cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 32px;
+      font-size: 18px;
+      font-weight: 600;
+      text-decoration: none;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+    }
+    .cta-primary {
+      background: linear-gradient(135deg, #FACC15, #F59E0B);
+      color: #0f172a;
+      box-shadow: 0 4px 20px rgba(250, 204, 21, 0.4);
+    }
+    .cta-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 30px rgba(250, 204, 21, 0.6);
+    }
+    .cta-secondary {
+      background: rgba(34, 211, 238, 0.1);
+      color: #22D3EE;
+      border: 2px solid #22D3EE;
+    }
+    .cta-secondary:hover {
+      background: rgba(34, 211, 238, 0.2);
+      transform: translateY(-2px);
+    }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+      max-width: 1200px;
+      width: 100%;
+      padding: 0 20px;
+    }
+    .feature {
+      background: rgba(30, 41, 59, 0.5);
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 24px;
+      backdrop-filter: blur(10px);
+    }
+    .feature-icon {
+      font-size: 32px;
+      margin-bottom: 12px;
+    }
+    .feature h3 {
+      color: #FACC15;
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+    .feature p {
+      color: #94a3b8;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    footer {
+      text-align: center;
+      padding: 30px;
+      color: #64748b;
+      font-size: 14px;
+      border-top: 1px solid #1e293b;
+    }
+    footer a {
+      color: #22D3EE;
+      text-decoration: none;
+    }
+    .tech-badge {
+      display: inline-block;
+      background: rgba(34, 211, 238, 0.1);
+      color: #22D3EE;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      margin: 4px;
+      border: 1px solid rgba(34, 211, 238, 0.3);
+    }
+    .badges {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <div class="logo">⚛️🔬</div>
+    <h1>Phillips Gate Quantum Simulator</h1>
+    <p class="subtitle">Visual Analog Computing on 4D Polytope Substrate</p>
+
+    <p class="description">
+      A groundbreaking visual quantum computing emulator that uses the <strong>24-cell polytope</strong>
+      as a qubit register substrate, <strong>Geometric Algebra rotors</strong> as quantum gates,
+      and <strong>Moiré interference patterns</strong> for state visualization.
+      Designed for interpretation by Vision Language Models.
+    </p>
+
+    <div class="cta-container">
+      <a href="demo.html" class="cta cta-primary">
+        🚀 Launch Interactive Demo
+      </a>
+      <a href="https://github.com/Domusgpt/Advanced-OptoOrthoKinetiscope" class="cta cta-secondary">
+        📂 View Source Code
+      </a>
+    </div>
+
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">🔮</div>
+        <h3>24-Cell Quantum Substrate</h3>
+        <p>24 qubits arranged on the vertices of a 4D regular polytope, corresponding to the Binary Tetrahedral Group (2T) ≅ SL(2,3).</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🌀</div>
+        <h3>Geometric Algebra Gates</h3>
+        <p>Quantum gates implemented as Clifford Algebra rotors in Cl(3,0). X, Y, Z, H, S, T gates with proper spinor action.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">〰️</div>
+        <h3>Moiré Visual Computing</h3>
+        <p>Replaces numerical readouts with interference patterns. 100× mechanical amplification for sub-pixel precision.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📊</div>
+        <h3>Analog Nomograms</h3>
+        <p>Visual calculation devices that Vision LLMs can "read" - connecting dots on scales to compute velocity, energy, and more.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🌐</div>
+        <h3>Hopf Fibration Projection</h3>
+        <p>Quaternions visualized via S³→S² projection with Clifford torus structure. Real-time 4D rotation animation.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🔥</div>
+        <h3>Simulated Annealing</h3>
+        <p>Energy minimization for combinatorial optimization. Metropolis-Hastings steps with temperature-based acceptance.</p>
+      </div>
+    </div>
+
+    <div class="badges">
+      <span class="tech-badge">TypeScript</span>
+      <span class="tech-badge">Clifford Algebra</span>
+      <span class="tech-badge">E8 Lattice</span>
+      <span class="tech-badge">Hopf Fibration</span>
+      <span class="tech-badge">Quasicrystals</span>
+      <span class="tech-badge">Moiré Patterns</span>
+    </div>
+  </div>
+
+  <footer>
+    <p>Part of the <strong>Advanced OptoOrthoKinetiscope</strong> project</p>
+    <p style="margin-top: 8px;">
+      <a href="https://github.com/Domusgpt/Advanced-OptoOrthoKinetiscope/blob/main/docs/PHILLIPS_GATE_ARCHITECTURE.md">Documentation</a>
+      &nbsp;•&nbsp;
+      <a href="https://github.com/Domusgpt/Advanced-OptoOrthoKinetiscope/blob/main/docs/API_REFERENCE.md">API Reference</a>
+      &nbsp;•&nbsp;
+      <a href="https://github.com/Domusgpt/Advanced-OptoOrthoKinetiscope/blob/main/docs/GEOMETRIC_ALGEBRA_PRIMER.md">GA Primer</a>
+    </p>
+  </footer>
+</body>
+</html>
