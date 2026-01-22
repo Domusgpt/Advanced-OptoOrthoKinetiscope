@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phillips Gate: Moiré Visual Computing</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Courier New', monospace;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        h1 { color: #00ff88; text-align: center; margin-bottom: 10px; font-size: 1.8em; }
+        .subtitle { text-align: center; color: #888; margin-bottom: 30px; }
+
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        .demo-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .panel {
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .panel h2 {
+            color: #00aaff;
+            font-size: 1.1em;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 8px;
+        }
+
+        canvas {
+            display: block;
+            margin: 0 auto 15px;
+            border: 1px solid #444;
+            background: #000;
+        }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .control-row label {
+            min-width: 140px;
+            color: #aaa;
+            font-size: 0.9em;
+        }
+
+        .control-row input[type="range"] {
+            flex: 1;
+            accent-color: #00ff88;
+        }
+
+        .control-row .value {
+            min-width: 80px;
+            text-align: right;
+            color: #00ff88;
+            font-weight: bold;
+        }
+
+        .explanation {
+            background: #1a1a2e;
+            border-left: 3px solid #00ff88;
+            padding: 15px;
+            margin-top: 15px;
+            font-size: 0.85em;
+            line-height: 1.6;
+        }
+
+        .explanation strong { color: #00ff88; }
+
+        .formula {
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+            background: #000;
+            padding: 8px 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            text-align: center;
+            font-size: 1.1em;
+        }
+
+        .readout {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .readout-item {
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .readout-item .label { color: #888; font-size: 0.8em; }
+        .readout-item .value { color: #ffaa00; font-size: 1.4em; font-weight: bold; }
+
+        .insight-box {
+            background: linear-gradient(135deg, #1a2a1a 0%, #0a1a0a 100%);
+            border: 1px solid #00ff88;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 30px;
+        }
+
+        .insight-box h3 { color: #00ff88; margin-bottom: 15px; }
+        .insight-box p { margin-bottom: 10px; line-height: 1.6; }
+
+        .highlight { color: #ffaa00; font-weight: bold; }
+
+        @media (max-width: 900px) {
+            .demo-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⟨ Phillips Gate: Moiré Visual Computing ⟩</h1>
+        <p class="subtitle">Encoding Computation as Interference Patterns for Vision LLM Interpretation</p>
+
+        <div class="demo-grid">
+            <!-- LINEAR MOIRÉ DEMO -->
+            <div class="panel">
+                <h2>① Linear Grating Moiré — Angle Amplification</h2>
+                <canvas id="linearMoire" width="400" height="300"></canvas>
+
+                <div class="controls">
+                    <div class="control-row">
+                        <label>Grating 1 Spacing:</label>
+                        <input type="range" id="d1" min="4" max="20" value="10" step="0.1">
+                        <span class="value" id="d1Val">10.0 px</span>
+                    </div>
+                    <div class="control-row">
+                        <label>Grating 2 Spacing:</label>
+                        <input type="range" id="d2" min="4" max="20" value="10.5" step="0.1">
+                        <span class="value" id="d2Val">10.5 px</span>
+                    </div>
+                    <div class="control-row">
+                        <label>Rotation Angle:</label>
+                        <input type="range" id="angle" min="0" max="10" value="2" step="0.1">
+                        <span class="value" id="angleVal">2.0°</span>
+                    </div>
+                </div>
+
+                <div class="readout">
+                    <div class="readout-item">
+                        <div class="label">Fringe Spacing</div>
+                        <div class="value" id="fringeSpacing">—</div>
+                    </div>
+                    <div class="readout-item">
+                        <div class="label">Magnification</div>
+                        <div class="value" id="magnification">—</div>
+                    </div>
+                </div>
+
+                <div class="explanation">
+                    <strong>THE KEY INSIGHT:</strong> When two gratings with spacing d₁ and d₂ overlap at angle θ,
+                    the resulting moiré fringe spacing is:
+                    <div class="formula">D = d₁ / (2 · sin(θ/2))</div>
+                    A <strong>1° rotation</strong> of a 10px grating creates fringes spaced <strong>573px apart</strong>.
+                    That's <strong>57× amplification</strong> — a tiny rotation becomes a massive visible shift.
+                </div>
+            </div>
+
+            <!-- LOG-POLAR MOIRÉ DEMO -->
+            <div class="panel">
+                <h2>② Log-Polar Grating — Rotation → Translation</h2>
+                <canvas id="logPolarMoire" width="400" height="300"></canvas>
+
+                <div class="controls">
+                    <div class="control-row">
+                        <label>Angular Frequency:</label>
+                        <input type="range" id="angularFreq" min="4" max="24" value="12" step="1">
+                        <span class="value" id="angularFreqVal">12</span>
+                    </div>
+                    <div class="control-row">
+                        <label>Rotation Offset:</label>
+                        <input type="range" id="rotationOffset" min="0" max="360" value="0" step="1">
+                        <span class="value" id="rotationOffsetVal">0°</span>
+                    </div>
+                    <div class="control-row">
+                        <label>Radial Scale:</label>
+                        <input type="range" id="radialScale" min="0.5" max="2" value="1" step="0.05">
+                        <span class="value" id="radialScaleVal">1.00×</span>
+                    </div>
+                </div>
+
+                <div class="readout">
+                    <div class="readout-item">
+                        <div class="label">Fringe Angle</div>
+                        <div class="value" id="fringeAngle">—</div>
+                    </div>
+                    <div class="readout-item">
+                        <div class="label">Scale Ratio</div>
+                        <div class="value" id="scaleRatio">—</div>
+                    </div>
+                </div>
+
+                <div class="explanation">
+                    <strong>CONFORMAL MAGIC:</strong> Log-polar coordinates map (r, θ) → (log r, θ).
+                    This transforms:
+                    <ul style="margin: 10px 0 10px 20px;">
+                        <li><strong>Rotation</strong> → Vertical translation</li>
+                        <li><strong>Scaling</strong> → Horizontal translation</li>
+                    </ul>
+                    A Vision LLM can measure rotation angle by counting how many fringes shifted vertically!
+                </div>
+            </div>
+
+            <!-- NOMOGRAM DEMO -->
+            <div class="panel">
+                <h2>③ Visual Nomogram — Multiplication Without Numbers</h2>
+                <canvas id="nomogram" width="400" height="300"></canvas>
+
+                <div class="controls">
+                    <div class="control-row">
+                        <label>Input A:</label>
+                        <input type="range" id="inputA" min="1" max="10" value="3" step="0.1">
+                        <span class="value" id="inputAVal">3.0</span>
+                    </div>
+                    <div class="control-row">
+                        <label>Input B:</label>
+                        <input type="range" id="inputB" min="1" max="10" value="4" step="0.1">
+                        <span class="value" id="inputBVal">4.0</span>
+                    </div>
+                </div>
+
+                <div class="readout">
+                    <div class="readout-item">
+                        <div class="label">A × B =</div>
+                        <div class="value" id="product">—</div>
+                    </div>
+                    <div class="readout-item">
+                        <div class="label">log₁₀(A×B)</div>
+                        <div class="value" id="logProduct">—</div>
+                    </div>
+                </div>
+
+                <div class="explanation">
+                    <strong>VISUAL CALCULATION:</strong> Nomograms encode mathematical relationships as geometric alignments.
+                    The intersection point of the red lines on the diagonal scale gives A × B.
+                    A Vision LLM reads the answer from <em>pattern position</em>, not digits.
+                </div>
+            </div>
+
+            <!-- DIFFERENTIAL FLOW DEMO -->
+            <div class="panel">
+                <h2>④ Differential Flow Field — Motion Detection</h2>
+                <canvas id="flowField" width="400" height="300"></canvas>
+
+                <div class="controls">
+                    <div class="control-row">
+                        <label>Velocity X:</label>
+                        <input type="range" id="velX" min="-5" max="5" value="1" step="0.1">
+                        <span class="value" id="velXVal">1.0</span>
+                    </div>
+                    <div class="control-row">
+                        <label>Velocity Y:</label>
+                        <input type="range" id="velY" min="-5" max="5" value="0.5" step="0.1">
+                        <span class="value" id="velYVal">0.5</span>
+                    </div>
+                    <div class="control-row">
+                        <label>Rotation (ω):</label>
+                        <input type="range" id="omega" min="-2" max="2" value="0.3" step="0.1">
+                        <span class="value" id="omegaVal">0.3 rad/s</span>
+                    </div>
+                </div>
+
+                <div class="readout">
+                    <div class="readout-item">
+                        <div class="label">Speed</div>
+                        <div class="value" id="speed">—</div>
+                    </div>
+                    <div class="readout-item">
+                        <div class="label">Direction</div>
+                        <div class="value" id="direction">—</div>
+                    </div>
+                </div>
+
+                <div class="explanation">
+                    <strong>OPTICAL FLOW:</strong> The vector field shows instantaneous motion.
+                    Spiral patterns indicate rotation, parallel arrows indicate translation.
+                    A Vision LLM can extract velocity and angular momentum from the flow topology.
+                </div>
+            </div>
+        </div>
+
+        <div class="insight-box">
+            <h3>🔬 Why This Matters for AI</h3>
+            <p>
+                <span class="highlight">Traditional Computing:</span> Encode data as numbers → Process with arithmetic → Output numbers → Parse text
+            </p>
+            <p>
+                <span class="highlight">Phillips Gate Visual Computing:</span> Encode data as <em>grating parameters</em> →
+                Process via <em>optical interference</em> → Output <em>geometric patterns</em> → Vision LLM reads patterns directly
+            </p>
+            <p style="margin-top: 15px;">
+                The moiré effect provides <strong>mechanical amplification</strong>: microscopic changes in rotation/spacing
+                produce macroscopic fringe shifts. This is the same principle used in precision measurement instruments.
+                For Vision LLMs, this means <strong>sub-pixel changes become visually obvious patterns</strong>.
+            </p>
+            <p style="margin-top: 15px;">
+                The 24-cell polytope enters because its 24 vertices correspond to the <strong>Binary Tetrahedral Group</strong> (2T),
+                which is isomorphic to SL(2,3) — the group of 2×2 matrices over F₃. Each vertex is a valid quantum gate rotation,
+                and the polytope edges define which gate sequences compose to identity. The moiré patterns visualize these 4D rotations
+                projected into 2D.
+            </p>
+        </div>
+    </div>
+
+    <script>
+    // ============================================
+    // LINEAR MOIRÉ VISUALIZATION
+    // ============================================
+    const linearCanvas = document.getElementById('linearMoire');
+    const linearCtx = linearCanvas.getContext('2d');
+
+    function drawLinearMoire() {
+        const d1 = parseFloat(document.getElementById('d1').value);
+        const d2 = parseFloat(document.getElementById('d2').value);
+        const angle = parseFloat(document.getElementById('angle').value) * Math.PI / 180;
+
+        const width = linearCanvas.width;
+        const height = linearCanvas.height;
+
+        // Create image data for pixel manipulation
+        const imageData = linearCtx.createImageData(width, height);
+        const data = imageData.data;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                // Grating 1: vertical lines
+                const g1 = Math.sin(2 * Math.PI * x / d1) > 0 ? 1 : 0;
+
+                // Grating 2: rotated lines
+                const x2 = (x - width/2) * Math.cos(angle) - (y - height/2) * Math.sin(angle) + width/2;
+                const g2 = Math.sin(2 * Math.PI * x2 / d2) > 0 ? 1 : 0;
+
+                // XOR creates moiré
+                const moire = g1 ^ g2;
+
+                const idx = (y * width + x) * 4;
+                const intensity = moire ? 220 : 30;
+                data[idx] = intensity * 0.2;     // R
+                data[idx + 1] = intensity;       // G
+                data[idx + 2] = intensity * 0.5; // B
+                data[idx + 3] = 255;             // A
+            }
+        }
+
+        linearCtx.putImageData(imageData, 0, 0);
+
+        // Calculate and display fringe properties
+        const fringeSpacing = angle > 0.001 ? d1 / (2 * Math.sin(angle / 2)) : Infinity;
+        const magnification = angle > 0.001 ? fringeSpacing / d1 : Infinity;
+
+        document.getElementById('fringeSpacing').textContent =
+            isFinite(fringeSpacing) ? fringeSpacing.toFixed(1) + ' px' : '∞';
+        document.getElementById('magnification').textContent =
+            isFinite(magnification) ? magnification.toFixed(1) + '×' : '∞';
+
+        // Update value displays
+        document.getElementById('d1Val').textContent = d1.toFixed(1) + ' px';
+        document.getElementById('d2Val').textContent = d2.toFixed(1) + ' px';
+        document.getElementById('angleVal').textContent = (angle * 180 / Math.PI).toFixed(1) + '°';
+    }
+
+    // ============================================
+    // LOG-POLAR MOIRÉ VISUALIZATION
+    // ============================================
+    const logPolarCanvas = document.getElementById('logPolarMoire');
+    const logPolarCtx = logPolarCanvas.getContext('2d');
+
+    function drawLogPolarMoire() {
+        const angularFreq = parseInt(document.getElementById('angularFreq').value);
+        const rotationOffset = parseFloat(document.getElementById('rotationOffset').value) * Math.PI / 180;
+        const radialScale = parseFloat(document.getElementById('radialScale').value);
+
+        const width = logPolarCanvas.width;
+        const height = logPolarCanvas.height;
+        const cx = width / 2;
+        const cy = height / 2;
+
+        const imageData = logPolarCtx.createImageData(width, height);
+        const data = imageData.data;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const dx = x - cx;
+                const dy = y - cy;
+                const r = Math.sqrt(dx * dx + dy * dy);
+                const theta = Math.atan2(dy, dx);
+
+                if (r < 5 || r > Math.min(cx, cy) - 5) {
+                    const idx = (y * width + x) * 4;
+                    data[idx] = data[idx + 1] = data[idx + 2] = 20;
+                    data[idx + 3] = 255;
+                    continue;
+                }
+
+                // Log-polar grating 1
+                const logR1 = Math.log(r);
+                const g1 = Math.sin(angularFreq * theta + 4 * logR1) > 0 ? 1 : 0;
+
+                // Log-polar grating 2 (rotated and scaled)
+                const logR2 = Math.log(r * radialScale);
+                const g2 = Math.sin(angularFreq * (theta + rotationOffset) + 4 * logR2) > 0 ? 1 : 0;
+
+                const moire = g1 ^ g2;
+
+                const idx = (y * width + x) * 4;
+                const intensity = moire ? 200 : 40;
+                data[idx] = intensity * 0.3;     // R
+                data[idx + 1] = intensity * 0.7; // G
+                data[idx + 2] = intensity;       // B
+                data[idx + 3] = 255;
+            }
+        }
+
+        logPolarCtx.putImageData(imageData, 0, 0);
+
+        // Draw center marker
+        logPolarCtx.beginPath();
+        logPolarCtx.arc(cx, cy, 3, 0, 2 * Math.PI);
+        logPolarCtx.fillStyle = '#ff4444';
+        logPolarCtx.fill();
+
+        // Update displays
+        document.getElementById('angularFreqVal').textContent = angularFreq;
+        document.getElementById('rotationOffsetVal').textContent = (rotationOffset * 180 / Math.PI).toFixed(0) + '°';
+        document.getElementById('radialScaleVal').textContent = radialScale.toFixed(2) + '×';
+        document.getElementById('fringeAngle').textContent = (rotationOffset * 180 / Math.PI).toFixed(1) + '°';
+        document.getElementById('scaleRatio').textContent = radialScale.toFixed(2);
+    }
+
+    // ============================================
+    // NOMOGRAM VISUALIZATION
+    // ============================================
+    const nomogramCanvas = document.getElementById('nomogram');
+    const nomogramCtx = nomogramCanvas.getContext('2d');
+
+    function drawNomogram() {
+        const inputA = parseFloat(document.getElementById('inputA').value);
+        const inputB = parseFloat(document.getElementById('inputB').value);
+
+        const width = nomogramCanvas.width;
+        const height = nomogramCanvas.height;
+        const margin = 40;
+
+        nomogramCtx.fillStyle = '#0a0a0a';
+        nomogramCtx.fillRect(0, 0, width, height);
+
+        // Draw scales
+        nomogramCtx.strokeStyle = '#444';
+        nomogramCtx.lineWidth = 1;
+
+        // Left scale (A: 1-10)
+        const leftX = margin;
+        nomogramCtx.beginPath();
+        nomogramCtx.moveTo(leftX, margin);
+        nomogramCtx.lineTo(leftX, height - margin);
+        nomogramCtx.stroke();
+
+        // Right scale (B: 1-10)
+        const rightX = width - margin;
+        nomogramCtx.beginPath();
+        nomogramCtx.moveTo(rightX, margin);
+        nomogramCtx.lineTo(rightX, height - margin);
+        nomogramCtx.stroke();
+
+        // Middle scale (Product: 1-100, logarithmic)
+        const midX = width / 2;
+        nomogramCtx.beginPath();
+        nomogramCtx.moveTo(midX, margin);
+        nomogramCtx.lineTo(midX, height - margin);
+        nomogramCtx.stroke();
+
+        // Draw tick marks and labels
+        nomogramCtx.fillStyle = '#888';
+        nomogramCtx.font = '10px monospace';
+        nomogramCtx.textAlign = 'center';
+
+        // Left scale ticks (linear 1-10)
+        for (let i = 1; i <= 10; i++) {
+            const y = margin + (height - 2 * margin) * (1 - Math.log10(i) / Math.log10(10));
+            nomogramCtx.beginPath();
+            nomogramCtx.moveTo(leftX - 5, y);
+            nomogramCtx.lineTo(leftX + 5, y);
+            nomogramCtx.stroke();
+            nomogramCtx.fillText(i.toString(), leftX - 15, y + 3);
+        }
+
+        // Right scale ticks
+        for (let i = 1; i <= 10; i++) {
+            const y = margin + (height - 2 * margin) * (1 - Math.log10(i) / Math.log10(10));
+            nomogramCtx.beginPath();
+            nomogramCtx.moveTo(rightX - 5, y);
+            nomogramCtx.lineTo(rightX + 5, y);
+            nomogramCtx.stroke();
+            nomogramCtx.fillText(i.toString(), rightX + 15, y + 3);
+        }
+
+        // Middle scale ticks (1-100 log)
+        for (let i = 1; i <= 100; i *= 2) {
+            const y = margin + (height - 2 * margin) * (1 - Math.log10(i) / Math.log10(100));
+            nomogramCtx.beginPath();
+            nomogramCtx.moveTo(midX - 5, y);
+            nomogramCtx.lineTo(midX + 5, y);
+            nomogramCtx.stroke();
+            if (i <= 64) nomogramCtx.fillText(i.toString(), midX, y - 8);
+        }
+
+        // Calculate positions
+        const yA = margin + (height - 2 * margin) * (1 - Math.log10(inputA) / Math.log10(10));
+        const yB = margin + (height - 2 * margin) * (1 - Math.log10(inputB) / Math.log10(10));
+        const product = inputA * inputB;
+        const yProduct = margin + (height - 2 * margin) * (1 - Math.log10(product) / Math.log10(100));
+
+        // Draw the alignment line
+        nomogramCtx.strokeStyle = '#ff4444';
+        nomogramCtx.lineWidth = 2;
+        nomogramCtx.beginPath();
+        nomogramCtx.moveTo(leftX, yA);
+        nomogramCtx.lineTo(rightX, yB);
+        nomogramCtx.stroke();
+
+        // Draw intersection point on middle scale
+        nomogramCtx.beginPath();
+        nomogramCtx.arc(midX, yProduct, 6, 0, 2 * Math.PI);
+        nomogramCtx.fillStyle = '#ffaa00';
+        nomogramCtx.fill();
+
+        // Draw input markers
+        nomogramCtx.fillStyle = '#00ff88';
+        nomogramCtx.beginPath();
+        nomogramCtx.arc(leftX, yA, 5, 0, 2 * Math.PI);
+        nomogramCtx.fill();
+
+        nomogramCtx.beginPath();
+        nomogramCtx.arc(rightX, yB, 5, 0, 2 * Math.PI);
+        nomogramCtx.fill();
+
+        // Labels
+        nomogramCtx.fillStyle = '#00ff88';
+        nomogramCtx.font = '12px monospace';
+        nomogramCtx.textAlign = 'left';
+        nomogramCtx.fillText('A', leftX - 25, height - 10);
+        nomogramCtx.fillText('B', rightX + 10, height - 10);
+        nomogramCtx.fillText('A×B', midX - 12, height - 10);
+
+        // Update displays
+        document.getElementById('inputAVal').textContent = inputA.toFixed(1);
+        document.getElementById('inputBVal').textContent = inputB.toFixed(1);
+        document.getElementById('product').textContent = product.toFixed(1);
+        document.getElementById('logProduct').textContent = Math.log10(product).toFixed(3);
+    }
+
+    // ============================================
+    // DIFFERENTIAL FLOW FIELD
+    // ============================================
+    const flowCanvas = document.getElementById('flowField');
+    const flowCtx = flowCanvas.getContext('2d');
+
+    function drawFlowField() {
+        const vx = parseFloat(document.getElementById('velX').value);
+        const vy = parseFloat(document.getElementById('velY').value);
+        const omega = parseFloat(document.getElementById('omega').value);
+
+        const width = flowCanvas.width;
+        const height = flowCanvas.height;
+        const cx = width / 2;
+        const cy = height / 2;
+
+        flowCtx.fillStyle = '#0a0a0a';
+        flowCtx.fillRect(0, 0, width, height);
+
+        // Draw grid of flow arrows
+        const gridSize = 25;
+        const arrowScale = 8;
+
+        for (let y = gridSize; y < height; y += gridSize) {
+            for (let x = gridSize; x < width; x += gridSize) {
+                // Position relative to center
+                const rx = x - cx;
+                const ry = y - cy;
+
+                // Velocity at this point: v + ω × r
+                const flowX = vx * 10 - omega * ry;
+                const flowY = vy * 10 + omega * rx;
+
+                const mag = Math.sqrt(flowX * flowX + flowY * flowY);
+                if (mag < 0.1) continue;
+
+                // Normalize and scale
+                const scale = Math.min(mag, gridSize * 0.8) / mag;
+                const dx = flowX * scale;
+                const dy = flowY * scale;
+
+                // Color based on magnitude
+                const hue = 180 - Math.min(mag, 30) * 3;
+                flowCtx.strokeStyle = `hsl(${hue}, 80%, 60%)`;
+                flowCtx.lineWidth = 1.5;
+
+                // Draw arrow
+                flowCtx.beginPath();
+                flowCtx.moveTo(x, y);
+                flowCtx.lineTo(x + dx, y + dy);
+                flowCtx.stroke();
+
+                // Arrow head
+                const angle = Math.atan2(dy, dx);
+                const headLen = 5;
+                flowCtx.beginPath();
+                flowCtx.moveTo(x + dx, y + dy);
+                flowCtx.lineTo(
+                    x + dx - headLen * Math.cos(angle - 0.4),
+                    y + dy - headLen * Math.sin(angle - 0.4)
+                );
+                flowCtx.moveTo(x + dx, y + dy);
+                flowCtx.lineTo(
+                    x + dx - headLen * Math.cos(angle + 0.4),
+                    y + dy - headLen * Math.sin(angle + 0.4)
+                );
+                flowCtx.stroke();
+            }
+        }
+
+        // Draw center
+        flowCtx.beginPath();
+        flowCtx.arc(cx, cy, 4, 0, 2 * Math.PI);
+        flowCtx.fillStyle = '#ff4444';
+        flowCtx.fill();
+
+        // Update displays
+        document.getElementById('velXVal').textContent = vx.toFixed(1);
+        document.getElementById('velYVal').textContent = vy.toFixed(1);
+        document.getElementById('omegaVal').textContent = omega.toFixed(1) + ' rad/s';
+
+        const speed = Math.sqrt(vx * vx + vy * vy);
+        const direction = Math.atan2(vy, vx) * 180 / Math.PI;
+        document.getElementById('speed').textContent = speed.toFixed(2);
+        document.getElementById('direction').textContent = direction.toFixed(1) + '°';
+    }
+
+    // ============================================
+    // EVENT LISTENERS
+    // ============================================
+    ['d1', 'd2', 'angle'].forEach(id => {
+        document.getElementById(id).addEventListener('input', drawLinearMoire);
+    });
+
+    ['angularFreq', 'rotationOffset', 'radialScale'].forEach(id => {
+        document.getElementById(id).addEventListener('input', drawLogPolarMoire);
+    });
+
+    ['inputA', 'inputB'].forEach(id => {
+        document.getElementById(id).addEventListener('input', drawNomogram);
+    });
+
+    ['velX', 'velY', 'omega'].forEach(id => {
+        document.getElementById(id).addEventListener('input', drawFlowField);
+    });
+
+    // Initial render
+    drawLinearMoire();
+    drawLogPolarMoire();
+    drawNomogram();
+    drawFlowField();
+    </script>
+</body>
+</html>
