@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KineticLens - Motion Measurement Tool</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Courier New', monospace;
+            background: #000;
+            color: #0f0;
+            overflow: hidden;
+        }
+
+        .container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #videoFeed {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #overlayCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        #moireCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            mix-blend-mode: difference;
+            opacity: 0.4;
+        }
+
+        .hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #0f0;
+            padding: 15px;
+            font-size: 14px;
+            z-index: 100;
+            min-width: 280px;
+        }
+
+        .hud h2 {
+            color: #0f0;
+            font-size: 16px;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #0f0;
+            padding-bottom: 8px;
+        }
+
+        .measurement {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            padding: 4px 0;
+        }
+
+        .measurement .label { color: #888; }
+        .measurement .value { color: #0f0; font-weight: bold; }
+        .measurement .unit { color: #666; margin-left: 5px; }
+
+        .sensor-section {
+            margin-top: 15px;
+            padding-top: 10px;
+            border-top: 1px solid #333;
+        }
+
+        .sensor-section h3 {
+            color: #0aa;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #0f0;
+            padding: 15px;
+            z-index: 100;
+        }
+
+        .controls label {
+            display: block;
+            margin: 8px 0;
+            color: #888;
+            font-size: 12px;
+        }
+
+        .controls input[type="range"] {
+            width: 150px;
+            accent-color: #0f0;
+        }
+
+        .controls select, .controls button {
+            background: #111;
+            color: #0f0;
+            border: 1px solid #0f0;
+            padding: 8px 12px;
+            margin: 5px 0;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .controls button:hover {
+            background: #0f0;
+            color: #000;
+        }
+
+        .status {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #0f0;
+            padding: 10px 15px;
+            z-index: 100;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+            font-size: 12px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-dot.active { background: #0f0; }
+        .status-dot.inactive { background: #f00; }
+        .status-dot.pending { background: #ff0; }
+
+        .crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        .crosshair::before, .crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(0, 255, 0, 0.5);
+        }
+
+        .crosshair::before {
+            width: 40px;
+            height: 2px;
+            left: -20px;
+            top: -1px;
+        }
+
+        .crosshair::after {
+            width: 2px;
+            height: 40px;
+            left: -1px;
+            top: -20px;
+        }
+
+        .vector-display {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #0f0;
+            padding: 15px;
+            z-index: 100;
+        }
+
+        #vectorCanvas {
+            display: block;
+        }
+
+        .error-msg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 0, 0, 0.2);
+            border: 1px solid #f00;
+            padding: 20px;
+            color: #f00;
+            text-align: center;
+            z-index: 200;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <video id="videoFeed" autoplay playsinline muted></video>
+        <canvas id="moireCanvas"></canvas>
+        <canvas id="overlayCanvas"></canvas>
+        <div class="crosshair"></div>
+
+        <!-- Measurements HUD -->
+        <div class="hud">
+            <h2>⟨ KINETIC LENS ⟩</h2>
+
+            <div class="measurement">
+                <span class="label">Optical Flow X:</span>
+                <span><span class="value" id="flowX">0.00</span><span class="unit">px/f</span></span>
+            </div>
+            <div class="measurement">
+                <span class="label">Optical Flow Y:</span>
+                <span><span class="value" id="flowY">0.00</span><span class="unit">px/f</span></span>
+            </div>
+            <div class="measurement">
+                <span class="label">Flow Magnitude:</span>
+                <span><span class="value" id="flowMag">0.00</span><span class="unit">px/f</span></span>
+            </div>
+            <div class="measurement">
+                <span class="label">Est. Velocity:</span>
+                <span><span class="value" id="velocity">0.00</span><span class="unit">m/s</span></span>
+            </div>
+
+            <div class="sensor-section">
+                <h3>DEVICE SENSORS</h3>
+                <div class="measurement">
+                    <span class="label">Gyro α (Z):</span>
+                    <span><span class="value" id="gyroAlpha">—</span><span class="unit">°</span></span>
+                </div>
+                <div class="measurement">
+                    <span class="label">Gyro β (X):</span>
+                    <span><span class="value" id="gyroBeta">—</span><span class="unit">°</span></span>
+                </div>
+                <div class="measurement">
+                    <span class="label">Gyro γ (Y):</span>
+                    <span><span class="value" id="gyroGamma">—</span><span class="unit">°</span></span>
+                </div>
+                <div class="measurement">
+                    <span class="label">Accel X:</span>
+                    <span><span class="value" id="accelX">—</span><span class="unit">m/s²</span></span>
+                </div>
+                <div class="measurement">
+                    <span class="label">Accel Y:</span>
+                    <span><span class="value" id="accelY">—</span><span class="unit">m/s²</span></span>
+                </div>
+                <div class="measurement">
+                    <span class="label">Accel Z:</span>
+                    <span><span class="value" id="accelZ">—</span><span class="unit">m/s²</span></span>
+                </div>
+            </div>
+
+            <div class="sensor-section">
+                <h3>COMPUTED VALUES</h3>
+                <div class="measurement">
+                    <span class="label">Camera Motion:</span>
+                    <span><span class="value" id="cameraMotion">—</span><span class="unit">°/s</span></span>
+                </div>
+                <div class="measurement">
+                    <span class="label">Object Motion:</span>
+                    <span><span class="value" id="objectMotion">—</span><span class="unit">px/f</span></span>
+                </div>
+                <div class="measurement">
+                    <span class="label">Stability:</span>
+                    <span><span class="value" id="stability">—</span><span class="unit">%</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status indicators -->
+        <div class="status">
+            <div class="status-item">
+                <div class="status-dot inactive" id="cameraStatus"></div>
+                <span>Camera</span>
+            </div>
+            <div class="status-item">
+                <div class="status-dot inactive" id="gyroStatus"></div>
+                <span>Gyroscope</span>
+            </div>
+            <div class="status-item">
+                <div class="status-dot inactive" id="accelStatus"></div>
+                <span>Accelerometer</span>
+            </div>
+            <div class="status-item">
+                <div class="status-dot inactive" id="flowStatus"></div>
+                <span>Optical Flow</span>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <button id="startBtn">▶ START CAPTURE</button>
+            <button id="requestSensors">📱 Enable Sensors</button>
+
+            <label>
+                Moiré Overlay:
+                <select id="moireType">
+                    <option value="none">None</option>
+                    <option value="linear">Linear Grating</option>
+                    <option value="radial">Radial Grating</option>
+                    <option value="logpolar" selected>Log-Polar</option>
+                </select>
+            </label>
+
+            <label>
+                Grating Frequency:
+                <input type="range" id="gratingFreq" min="5" max="50" value="20">
+            </label>
+
+            <label>
+                Overlay Opacity:
+                <input type="range" id="moireOpacity" min="0" max="100" value="40">
+            </label>
+
+            <label>
+                Flow Sensitivity:
+                <input type="range" id="flowSensitivity" min="1" max="20" value="10">
+            </label>
+
+            <label>
+                Distance (est):
+                <input type="range" id="distanceEst" min="0.5" max="10" step="0.1" value="2">
+                <span id="distanceVal">2.0m</span>
+            </label>
+        </div>
+
+        <!-- Vector display -->
+        <div class="vector-display">
+            <canvas id="vectorCanvas" width="150" height="150"></canvas>
+        </div>
+
+        <div class="error-msg" id="errorMsg"></div>
+    </div>
+
+    <script>
+    // ===========================================
+    // STATE
+    // ===========================================
+    const state = {
+        cameraActive: false,
+        gyroActive: false,
+        accelActive: false,
+
+        // Sensor data
+        gyro: { alpha: 0, beta: 0, gamma: 0 },
+        accel: { x: 0, y: 0, z: 0 },
+
+        // Previous gyro for rate calculation
+        prevGyro: { alpha: 0, beta: 0, gamma: 0 },
+        gyroRate: { alpha: 0, beta: 0, gamma: 0 },
+
+        // Optical flow
+        prevFrame: null,
+        flowX: 0,
+        flowY: 0,
+        flowHistory: [],
+
+        // Time tracking
+        lastTime: 0,
+        frameCount: 0
+    };
+
+    // ===========================================
+    // DOM ELEMENTS
+    // ===========================================
+    const video = document.getElementById('videoFeed');
+    const moireCanvas = document.getElementById('moireCanvas');
+    const moireCtx = moireCanvas.getContext('2d');
+    const overlayCanvas = document.getElementById('overlayCanvas');
+    const overlayCtx = overlayCanvas.getContext('2d');
+    const vectorCanvas = document.getElementById('vectorCanvas');
+    const vectorCtx = vectorCanvas.getContext('2d');
+
+    // ===========================================
+    // CAMERA INITIALIZATION
+    // ===========================================
+    async function startCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: 'environment',
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
+            });
+
+            video.srcObject = stream;
+            await video.play();
+
+            // Set canvas sizes
+            moireCanvas.width = video.videoWidth || 1280;
+            moireCanvas.height = video.videoHeight || 720;
+            overlayCanvas.width = moireCanvas.width;
+            overlayCanvas.height = moireCanvas.height;
+
+            state.cameraActive = true;
+            document.getElementById('cameraStatus').classList.add('active');
+            document.getElementById('cameraStatus').classList.remove('inactive');
+
+            // Start processing
+            requestAnimationFrame(processFrame);
+
+        } catch (err) {
+            showError('Camera access denied: ' + err.message);
+        }
+    }
+
+    // ===========================================
+    // SENSOR INITIALIZATION
+    // ===========================================
+    async function requestSensorPermission() {
+        // Request gyroscope
+        if (typeof DeviceOrientationEvent !== 'undefined' &&
+            typeof DeviceOrientationEvent.requestPermission === 'function') {
+            try {
+                const permission = await DeviceOrientationEvent.requestPermission();
+                if (permission === 'granted') {
+                    enableGyroscope();
+                }
+            } catch (err) {
+                console.log('Gyro permission error:', err);
+            }
+        } else {
+            enableGyroscope();
+        }
+
+        // Request accelerometer
+        if (typeof DeviceMotionEvent !== 'undefined' &&
+            typeof DeviceMotionEvent.requestPermission === 'function') {
+            try {
+                const permission = await DeviceMotionEvent.requestPermission();
+                if (permission === 'granted') {
+                    enableAccelerometer();
+                }
+            } catch (err) {
+                console.log('Accel permission error:', err);
+            }
+        } else {
+            enableAccelerometer();
+        }
+    }
+
+    function enableGyroscope() {
+        window.addEventListener('deviceorientation', (e) => {
+            if (e.alpha !== null) {
+                state.prevGyro = { ...state.gyro };
+                state.gyro.alpha = e.alpha;
+                state.gyro.beta = e.beta;
+                state.gyro.gamma = e.gamma;
+
+                if (!state.gyroActive) {
+                    state.gyroActive = true;
+                    document.getElementById('gyroStatus').classList.add('active');
+                    document.getElementById('gyroStatus').classList.remove('inactive');
+                }
+            }
+        });
+    }
+
+    function enableAccelerometer() {
+        window.addEventListener('devicemotion', (e) => {
+            if (e.accelerationIncludingGravity) {
+                state.accel.x = e.accelerationIncludingGravity.x || 0;
+                state.accel.y = e.accelerationIncludingGravity.y || 0;
+                state.accel.z = e.accelerationIncludingGravity.z || 0;
+
+                if (!state.accelActive) {
+                    state.accelActive = true;
+                    document.getElementById('accelStatus').classList.add('active');
+                    document.getElementById('accelStatus').classList.remove('inactive');
+                }
+            }
+        });
+    }
+
+    // ===========================================
+    // OPTICAL FLOW (Lucas-Kanade simplified)
+    // ===========================================
+    function computeOpticalFlow(currentData, prevData, width, height) {
+        if (!prevData) return { x: 0, y: 0 };
+
+        const blockSize = 16;
+        const searchRadius = 8;
+        let totalDx = 0, totalDy = 0, count = 0;
+
+        // Sample blocks across the image
+        for (let by = blockSize; by < height - blockSize; by += blockSize * 2) {
+            for (let bx = blockSize; bx < width - blockSize; bx += blockSize * 2) {
+                // Find best match in search window
+                let bestDx = 0, bestDy = 0, bestSAD = Infinity;
+
+                for (let dy = -searchRadius; dy <= searchRadius; dy += 2) {
+                    for (let dx = -searchRadius; dx <= searchRadius; dx += 2) {
+                        let sad = 0;
+
+                        // Sum of absolute differences
+                        for (let y = -4; y < 4; y += 2) {
+                            for (let x = -4; x < 4; x += 2) {
+                                const idx1 = ((by + y) * width + (bx + x)) * 4;
+                                const idx2 = ((by + y + dy) * width + (bx + x + dx)) * 4;
+
+                                if (idx2 >= 0 && idx2 < prevData.length - 4) {
+                                    // Grayscale comparison
+                                    const g1 = currentData[idx1] * 0.3 + currentData[idx1+1] * 0.59 + currentData[idx1+2] * 0.11;
+                                    const g2 = prevData[idx2] * 0.3 + prevData[idx2+1] * 0.59 + prevData[idx2+2] * 0.11;
+                                    sad += Math.abs(g1 - g2);
+                                }
+                            }
+                        }
+
+                        if (sad < bestSAD) {
+                            bestSAD = sad;
+                            bestDx = dx;
+                            bestDy = dy;
+                        }
+                    }
+                }
+
+                // Only count significant motion
+                if (bestSAD < 1000) {
+                    totalDx += bestDx;
+                    totalDy += bestDy;
+                    count++;
+                }
+            }
+        }
+
+        if (count > 0) {
+            return { x: totalDx / count, y: totalDy / count };
+        }
+        return { x: 0, y: 0 };
+    }
+
+    // ===========================================
+    // MOIRÉ GRATING GENERATION
+    // ===========================================
+    function drawMoireGrating(type, freq, phase) {
+        const width = moireCanvas.width;
+        const height = moireCanvas.height;
+        const cx = width / 2;
+        const cy = height / 2;
+
+        const imageData = moireCtx.createImageData(width, height);
+        const data = imageData.data;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                let intensity = 0;
+
+                if (type === 'linear') {
+                    // Linear grating - sensitive to translation
+                    intensity = Math.sin((x * freq / 10) + phase) > 0 ? 255 : 0;
+
+                } else if (type === 'radial') {
+                    // Radial grating - sensitive to zoom/scale
+                    const r = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+                    intensity = Math.sin((r * freq / 20) + phase) > 0 ? 255 : 0;
+
+                } else if (type === 'logpolar') {
+                    // Log-polar - rotation becomes translation
+                    const dx = x - cx;
+                    const dy = y - cy;
+                    const r = Math.sqrt(dx * dx + dy * dy);
+                    const theta = Math.atan2(dy, dx);
+
+                    if (r > 10) {
+                        const logR = Math.log(r);
+                        // Spiral pattern: combines radial and angular
+                        intensity = Math.sin(freq * theta + (freq/3) * logR + phase) > 0 ? 255 : 0;
+                    }
+                }
+
+                const idx = (y * width + x) * 4;
+                data[idx] = intensity;
+                data[idx + 1] = intensity;
+                data[idx + 2] = intensity;
+                data[idx + 3] = 255;
+            }
+        }
+
+        moireCtx.putImageData(imageData, 0, 0);
+    }
+
+    // ===========================================
+    // VECTOR DISPLAY
+    // ===========================================
+    function drawVectorDisplay() {
+        const w = vectorCanvas.width;
+        const h = vectorCanvas.height;
+        const cx = w / 2;
+        const cy = h / 2;
+
+        vectorCtx.fillStyle = '#000';
+        vectorCtx.fillRect(0, 0, w, h);
+
+        // Grid
+        vectorCtx.strokeStyle = '#222';
+        vectorCtx.lineWidth = 1;
+        for (let i = 0; i <= w; i += 30) {
+            vectorCtx.beginPath();
+            vectorCtx.moveTo(i, 0);
+            vectorCtx.lineTo(i, h);
+            vectorCtx.stroke();
+            vectorCtx.beginPath();
+            vectorCtx.moveTo(0, i);
+            vectorCtx.lineTo(w, i);
+            vectorCtx.stroke();
+        }
+
+        // Axes
+        vectorCtx.strokeStyle = '#444';
+        vectorCtx.beginPath();
+        vectorCtx.moveTo(cx, 0);
+        vectorCtx.lineTo(cx, h);
+        vectorCtx.moveTo(0, cy);
+        vectorCtx.lineTo(w, cy);
+        vectorCtx.stroke();
+
+        // Flow vector (green)
+        const sensitivity = parseFloat(document.getElementById('flowSensitivity').value);
+        const flowScale = 5 * sensitivity;
+        vectorCtx.strokeStyle = '#0f0';
+        vectorCtx.lineWidth = 2;
+        vectorCtx.beginPath();
+        vectorCtx.moveTo(cx, cy);
+        vectorCtx.lineTo(cx + state.flowX * flowScale, cy + state.flowY * flowScale);
+        vectorCtx.stroke();
+
+        // Flow arrow head
+        const flowAngle = Math.atan2(state.flowY, state.flowX);
+        const flowMag = Math.sqrt(state.flowX ** 2 + state.flowY ** 2);
+        if (flowMag > 0.5) {
+            const arrowLen = 8;
+            const endX = cx + state.flowX * flowScale;
+            const endY = cy + state.flowY * flowScale;
+            vectorCtx.beginPath();
+            vectorCtx.moveTo(endX, endY);
+            vectorCtx.lineTo(endX - arrowLen * Math.cos(flowAngle - 0.4), endY - arrowLen * Math.sin(flowAngle - 0.4));
+            vectorCtx.moveTo(endX, endY);
+            vectorCtx.lineTo(endX - arrowLen * Math.cos(flowAngle + 0.4), endY - arrowLen * Math.sin(flowAngle + 0.4));
+            vectorCtx.stroke();
+        }
+
+        // Gyro vector (cyan) - only if active
+        if (state.gyroActive) {
+            const gyroScale = 2;
+            vectorCtx.strokeStyle = '#0ff';
+            vectorCtx.beginPath();
+            vectorCtx.moveTo(cx, cy);
+            vectorCtx.lineTo(cx + state.gyroRate.gamma * gyroScale, cy + state.gyroRate.beta * gyroScale);
+            vectorCtx.stroke();
+        }
+
+        // Labels
+        vectorCtx.fillStyle = '#0f0';
+        vectorCtx.font = '10px monospace';
+        vectorCtx.fillText('Flow', 5, 12);
+        vectorCtx.fillStyle = '#0ff';
+        vectorCtx.fillText('Gyro', 5, 24);
+    }
+
+    // ===========================================
+    // MAIN PROCESSING LOOP
+    // ===========================================
+    function processFrame(timestamp) {
+        if (!state.cameraActive) {
+            requestAnimationFrame(processFrame);
+            return;
+        }
+
+        const dt = timestamp - state.lastTime;
+        state.lastTime = timestamp;
+        state.frameCount++;
+
+        // Get current frame
+        overlayCtx.drawImage(video, 0, 0, overlayCanvas.width, overlayCanvas.height);
+        const currentFrame = overlayCtx.getImageData(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+        // Compute optical flow
+        if (state.prevFrame && state.frameCount % 2 === 0) {
+            const flow = computeOpticalFlow(
+                currentFrame.data,
+                state.prevFrame.data,
+                overlayCanvas.width,
+                overlayCanvas.height
+            );
+
+            // Smooth the flow
+            state.flowX = state.flowX * 0.7 + flow.x * 0.3;
+            state.flowY = state.flowY * 0.7 + flow.y * 0.3;
+
+            // Track history for stability calculation
+            state.flowHistory.push({ x: flow.x, y: flow.y, t: timestamp });
+            if (state.flowHistory.length > 30) state.flowHistory.shift();
+
+            document.getElementById('flowStatus').classList.add('active');
+            document.getElementById('flowStatus').classList.remove('inactive');
+        }
+
+        state.prevFrame = currentFrame;
+
+        // Calculate gyro rate
+        if (state.gyroActive && dt > 0) {
+            state.gyroRate.alpha = (state.gyro.alpha - state.prevGyro.alpha) / (dt / 1000);
+            state.gyroRate.beta = (state.gyro.beta - state.prevGyro.beta) / (dt / 1000);
+            state.gyroRate.gamma = (state.gyro.gamma - state.prevGyro.gamma) / (dt / 1000);
+
+            // Handle wraparound
+            if (Math.abs(state.gyroRate.alpha) > 180) state.gyroRate.alpha = 0;
+        }
+
+        // Draw moiré overlay
+        const moireType = document.getElementById('moireType').value;
+        const gratingFreq = parseFloat(document.getElementById('gratingFreq').value);
+        const opacity = parseFloat(document.getElementById('moireOpacity').value) / 100;
+
+        if (moireType !== 'none') {
+            // Phase shifts based on detected motion - this creates visible fringe movement
+            const phase = (state.flowX + state.flowY) * 0.5;
+            drawMoireGrating(moireType, gratingFreq, phase);
+        } else {
+            moireCtx.clearRect(0, 0, moireCanvas.width, moireCanvas.height);
+        }
+        moireCanvas.style.opacity = opacity;
+
+        // Draw flow field overlay
+        drawFlowOverlay();
+
+        // Update displays
+        updateHUD(dt);
+        drawVectorDisplay();
+
+        requestAnimationFrame(processFrame);
+    }
+
+    function drawFlowOverlay() {
+        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+        const sensitivity = parseFloat(document.getElementById('flowSensitivity').value);
+        const flowMag = Math.sqrt(state.flowX ** 2 + state.flowY ** 2);
+
+        if (flowMag > 0.5) {
+            const cx = overlayCanvas.width / 2;
+            const cy = overlayCanvas.height / 2;
+
+            // Draw motion vector at center
+            overlayCtx.strokeStyle = 'rgba(0, 255, 0, 0.8)';
+            overlayCtx.lineWidth = 3;
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(cx, cy);
+            overlayCtx.lineTo(cx + state.flowX * sensitivity * 5, cy + state.flowY * sensitivity * 5);
+            overlayCtx.stroke();
+
+            // Arrow head
+            const angle = Math.atan2(state.flowY, state.flowX);
+            const endX = cx + state.flowX * sensitivity * 5;
+            const endY = cy + state.flowY * sensitivity * 5;
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(endX, endY);
+            overlayCtx.lineTo(endX - 15 * Math.cos(angle - 0.3), endY - 15 * Math.sin(angle - 0.3));
+            overlayCtx.lineTo(endX - 15 * Math.cos(angle + 0.3), endY - 15 * Math.sin(angle + 0.3));
+            overlayCtx.closePath();
+            overlayCtx.fillStyle = 'rgba(0, 255, 0, 0.8)';
+            overlayCtx.fill();
+        }
+    }
+
+    function updateHUD(dt) {
+        const sensitivity = parseFloat(document.getElementById('flowSensitivity').value);
+        const distance = parseFloat(document.getElementById('distanceEst').value);
+
+        // Flow values
+        document.getElementById('flowX').textContent = state.flowX.toFixed(2);
+        document.getElementById('flowY').textContent = state.flowY.toFixed(2);
+
+        const flowMag = Math.sqrt(state.flowX ** 2 + state.flowY ** 2);
+        document.getElementById('flowMag').textContent = flowMag.toFixed(2);
+
+        // Estimated velocity (using pinhole camera model approximation)
+        // v = (flow * distance) / (focal_length * dt)
+        // Assuming ~30 fps and typical phone focal length
+        const focalLengthPx = 1000; // approximate
+        const fps = dt > 0 ? 1000 / dt : 30;
+        const velocity = (flowMag * distance) / (focalLengthPx / fps);
+        document.getElementById('velocity').textContent = velocity.toFixed(2);
+
+        // Gyro values
+        if (state.gyroActive) {
+            document.getElementById('gyroAlpha').textContent = state.gyro.alpha.toFixed(1);
+            document.getElementById('gyroBeta').textContent = state.gyro.beta.toFixed(1);
+            document.getElementById('gyroGamma').textContent = state.gyro.gamma.toFixed(1);
+
+            const cameraMotion = Math.sqrt(state.gyroRate.beta ** 2 + state.gyroRate.gamma ** 2);
+            document.getElementById('cameraMotion').textContent = cameraMotion.toFixed(1);
+        }
+
+        // Accel values
+        if (state.accelActive) {
+            document.getElementById('accelX').textContent = state.accel.x.toFixed(2);
+            document.getElementById('accelY').textContent = state.accel.y.toFixed(2);
+            document.getElementById('accelZ').textContent = state.accel.z.toFixed(2);
+        }
+
+        // Separate camera motion from object motion
+        // Object motion = Total optical flow - (gyro-induced flow)
+        if (state.gyroActive) {
+            // Gyro rates predict camera-induced optical flow
+            const gyroFlowX = state.gyroRate.gamma * 0.1; // rough conversion
+            const gyroFlowY = state.gyroRate.beta * 0.1;
+
+            const objectFlowX = state.flowX - gyroFlowX;
+            const objectFlowY = state.flowY - gyroFlowY;
+            const objectMag = Math.sqrt(objectFlowX ** 2 + objectFlowY ** 2);
+
+            document.getElementById('objectMotion').textContent = objectMag.toFixed(2);
+        }
+
+        // Stability score
+        if (state.flowHistory.length > 10) {
+            let variance = 0;
+            const recent = state.flowHistory.slice(-10);
+            const avgX = recent.reduce((s, f) => s + f.x, 0) / recent.length;
+            const avgY = recent.reduce((s, f) => s + f.y, 0) / recent.length;
+
+            for (const f of recent) {
+                variance += (f.x - avgX) ** 2 + (f.y - avgY) ** 2;
+            }
+            variance /= recent.length;
+
+            const stability = Math.max(0, 100 - variance * 10);
+            document.getElementById('stability').textContent = stability.toFixed(0);
+        }
+
+        // Distance display
+        document.getElementById('distanceVal').textContent = distance.toFixed(1) + 'm';
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('errorMsg');
+        el.textContent = msg;
+        el.style.display = 'block';
+        setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    // ===========================================
+    // EVENT LISTENERS
+    // ===========================================
+    document.getElementById('startBtn').addEventListener('click', () => {
+        if (!state.cameraActive) {
+            startCamera();
+            document.getElementById('startBtn').textContent = '⏹ STOP';
+        } else {
+            video.srcObject?.getTracks().forEach(t => t.stop());
+            state.cameraActive = false;
+            document.getElementById('cameraStatus').classList.remove('active');
+            document.getElementById('cameraStatus').classList.add('inactive');
+            document.getElementById('startBtn').textContent = '▶ START CAPTURE';
+        }
+    });
+
+    document.getElementById('requestSensors').addEventListener('click', requestSensorPermission);
+
+    document.getElementById('distanceEst').addEventListener('input', (e) => {
+        document.getElementById('distanceVal').textContent = parseFloat(e.target.value).toFixed(1) + 'm';
+    });
+
+    // Auto-start on desktop (no permission needed)
+    if (!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+        // Try to enable sensors automatically on desktop
+        enableGyroscope();
+        enableAccelerometer();
+    }
+    </script>
+</body>
+</html>
