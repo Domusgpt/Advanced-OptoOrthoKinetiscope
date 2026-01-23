@@ -542,6 +542,14 @@
                     <div class="status-dot" id="flowStatus"></div>
                     <span>Flow</span>
                 </div>
+                <div class="status-item">
+                    <div class="status-dot" id="kalmanStatus"></div>
+                    <span>Kalman</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-dot" id="calibStatus"></div>
+                    <span>Calib</span>
+                </div>
             </div>
         </header>
 
@@ -1023,6 +1031,130 @@
             state.motionState = 'STATIONARY';
         }
     }
+
+    // =========================================================================
+    // SMART POLLING - Skip frames when stationary to save battery
+    // =========================================================================
+
+    const smartPolling = {
+        frameSkipCounter: 0,
+        stationaryFrames: 0,
+        lastProcessTime: 0,
+
+        shouldProcess() {
+            const now = performance.now();
+            const timeSinceLast = now - this.lastProcessTime;
+
+            if (state.motionState === 'FAST') {
+                // Always process when moving fast
+                this.stationaryFrames = 0;
+                this.lastProcessTime = now;
+                return true;
+            } else if (state.motionState === 'MOVING') {
+                // Process every other frame
+                this.stationaryFrames = 0;
+                this.frameSkipCounter++;
+                if (this.frameSkipCounter % 2 === 0) {
+                    this.lastProcessTime = now;
+                    return true;
+                }
+                return false;
+            } else {
+                // STATIONARY - process rarely
+                this.stationaryFrames++;
+
+                // Still process occasionally to detect motion start
+                if (this.stationaryFrames < 30) {
+                    // First second: every 3rd frame
+                    this.frameSkipCounter++;
+                    if (this.frameSkipCounter % 3 === 0) {
+                        this.lastProcessTime = now;
+                        return true;
+                    }
+                } else {
+                    // After 1 second stationary: every 10th frame
+                    this.frameSkipCounter++;
+                    if (this.frameSkipCounter % 10 === 0) {
+                        this.lastProcessTime = now;
+                        return true;
+                    }
+                }
+
+                // But always process if we haven't in 500ms
+                if (timeSinceLast > 500) {
+                    this.lastProcessTime = now;
+                    return true;
+                }
+
+                return false;
+            }
+        },
+
+        reset() {
+            this.frameSkipCounter = 0;
+            this.stationaryFrames = 0;
+            this.lastProcessTime = 0;
+        }
+    };
+
+    // =========================================================================
+    // AUDIO FEEDBACK - TTC Warning
+    // =========================================================================
+
+    const audioFeedback = {
+        audioCtx: null,
+        lastBeepTime: 0,
+        enabled: true,
+
+        init() {
+            // Create audio context on first user interaction
+            if (!this.audioCtx) {
+                try {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.log('Audio not available');
+                }
+            }
+        },
+
+        beep(frequency, duration, volume = 0.3) {
+            if (!this.audioCtx || !this.enabled) return;
+
+            const now = performance.now();
+            if (now - this.lastBeepTime < 200) return; // Rate limit
+            this.lastBeepTime = now;
+
+            try {
+                const osc = this.audioCtx.createOscillator();
+                const gain = this.audioCtx.createGain();
+
+                osc.connect(gain);
+                gain.connect(this.audioCtx.destination);
+
+                osc.frequency.value = frequency;
+                osc.type = 'sine';
+
+                gain.gain.setValueAtTime(volume, this.audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + duration);
+
+                osc.start(this.audioCtx.currentTime);
+                osc.stop(this.audioCtx.currentTime + duration);
+            } catch (e) {}
+        },
+
+        ttcWarning(ttc) {
+            if (ttc < 1) {
+                // Critical: fast beeps
+                this.beep(880, 0.1, 0.5);
+            } else if (ttc < 2) {
+                // Urgent: medium beeps
+                this.beep(660, 0.15, 0.4);
+            } else if (ttc < 3) {
+                // Warning: slow beeps
+                this.beep(440, 0.2, 0.3);
+            }
+        }
+    };
 
     // =========================================================================
     // FLOW FIELD DECOMPOSITION
@@ -1915,6 +2047,30 @@
 
     let moirePhaseAccum = 0;
 
+    // HSL to RGB conversion for color-coded moiré
+    function hslToRgb(h, s, l) {
+        h = h / 360;
+        let r, g, b;
+        if (s === 0) {
+            r = g = b = l;
+        } else {
+            const hue2rgb = (p, q, t) => {
+                if (t < 0) t += 1;
+                if (t > 1) t -= 1;
+                if (t < 1/6) return p + (q - p) * 6 * t;
+                if (t < 1/2) return q;
+                if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                return p;
+            };
+            const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            const p = 2 * l - q;
+            r = hue2rgb(p, q, h + 1/3);
+            g = hue2rgb(p, q, h);
+            b = hue2rgb(p, q, h - 1/3);
+        }
+        return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+    }
+
     function drawMoire(width, height, rotation, flowMag) {
         // Only resize if needed
         if (moireCanvas.width !== width || moireCanvas.height !== height) {
@@ -1925,41 +2081,83 @@
         // Accumulate phase based on motion - this creates the "beating" effect
         moirePhaseAccum += flowMag * 0.05;
 
+        // Get optical rotation rate from flow decomposition
+        const opticalRotation = state.flowDecomposition.rotation || 0;
+
         const img = moireCtx.createImageData(width, height);
         const d = img.data;
 
-        // Two overlapping gratings at slightly different frequencies
-        // Their interference creates moiré fringes that amplify small motions
-        const freq1 = 0.12;
-        const freq2 = 0.125; // Slightly different = low-frequency beats
+        // Reference grating - fixed orientation
+        const refFreq = 0.08;
 
-        const cos1 = Math.cos(rotation);
-        const sin1 = Math.sin(rotation);
-        const cos2 = Math.cos(rotation + 0.02); // Slight angle difference
-        const sin2 = Math.sin(rotation + 0.02);
+        // Measurement grating - rotates with camera/scene
+        // The angle difference creates moiré fringes that AMPLIFY small rotations
+        // 1° rotation → many fringe shifts (amplification factor = freq ratio)
+        const measFreq = 0.085;
+
+        // Combined rotation from IMU + optical flow
+        const imuRotation = rotation;
+        const combinedRotation = imuRotation + opticalRotation * 0.5;
+
+        const cos1 = Math.cos(0); // Reference: fixed
+        const sin1 = Math.sin(0);
+        const cos2 = Math.cos(combinedRotation);
+        const sin2 = Math.sin(combinedRotation);
 
         const cx = width / 2;
         const cy = height / 2;
+
+        // Log-polar center region for rotation-invariant matching
+        const logPolarRadius = Math.min(width, height) * 0.3;
 
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const dx = x - cx;
                 const dy = y - cy;
+                const r = Math.sqrt(dx * dx + dy * dy);
 
-                // Grating 1 - reference (fixed)
-                const xr1 = dx * cos1 - dy * sin1;
-                const g1 = Math.sin(xr1 * freq1);
+                let v;
 
-                // Grating 2 - shifted by motion
-                const xr2 = dx * cos2 - dy * sin2;
-                const g2 = Math.sin(xr2 * freq2 + moirePhaseAccum);
+                if (r < logPolarRadius && r > 20) {
+                    // LOG-POLAR region: rotation becomes horizontal shift
+                    // This is the key insight - rotation is easier to measure as translation
+                    const theta = Math.atan2(dy, dx);
+                    const logR = Math.log(r + 1);
 
-                // Interference = product of gratings
-                // This creates low-frequency moiré fringes
-                const interference = (g1 * g2 + 1) * 0.5;
+                    // Reference grating in log-polar space
+                    const g1 = Math.sin(theta * 8 + moirePhaseAccum);
 
-                // Convert to binary for sharper fringes
-                const v = interference > 0.5 ? 200 : 55;
+                    // Measurement grating - shifted by rotation
+                    const g2 = Math.sin((theta + combinedRotation) * 8.5);
+
+                    // Interference shows rotation as fringe shifts
+                    const interference = (g1 * g2 + 1) * 0.5;
+                    v = interference > 0.5 ? 180 : 40;
+
+                    // Color code by angle for orientation reference
+                    const hue = ((theta + Math.PI) / (2 * Math.PI)) * 360;
+                    const rgb = hslToRgb(hue, 0.3, interference > 0.5 ? 0.6 : 0.2);
+
+                    const i = (y * width + x) * 4;
+                    d[i] = rgb[0];
+                    d[i + 1] = rgb[1];
+                    d[i + 2] = rgb[2];
+                    d[i + 3] = 200;
+                    continue;
+                } else {
+                    // Linear moiré in outer region
+                    // Grating 1 - reference (fixed)
+                    const xr1 = dx * cos1 - dy * sin1;
+                    const g1 = Math.sin(xr1 * refFreq);
+
+                    // Grating 2 - rotated with motion
+                    const xr2 = dx * cos2 - dy * sin2;
+                    const g2 = Math.sin(xr2 * measFreq + moirePhaseAccum * 0.5);
+
+                    // Interference
+                    const interference = (g1 * g2 + 1) * 0.5;
+                    v = interference > 0.5 ? 160 : 50;
+                }
 
                 const i = (y * width + x) * 4;
                 d[i] = v;
@@ -2131,6 +2329,41 @@
         ctx.fillText(`${state.fps.toFixed(0)} FPS`, 10, 20);
         ctx.fillText(`Flow: ${state.flowField.filter(f => f.magnitude > 0.5).length}/${state.flowField.length}`, 10, 35);
         ctx.fillText(`Features: ${state.trackedFeatures.length}`, 10, 50);
+
+        // Motion state indicator
+        ctx.fillStyle = state.motionState === 'FAST' ? '#ff4444' :
+                        state.motionState === 'MOVING' ? '#ffaa00' : '#00ff88';
+        ctx.fillText(`${state.motionState}`, 10, 65);
+
+        // Processing scale indicator
+        ctx.fillStyle = 'rgba(0, 255, 136, 0.5)';
+        ctx.fillText(`Scale: ${(state.processScale * 100).toFixed(0)}%`, 10, 80);
+
+        // TTC Warning overlay
+        const ttc = state.flowDecomposition.ttc;
+        if (ttc < 5 && ttc > 0) {
+            // Draw warning border
+            const urgency = Math.max(0, 1 - ttc / 5);
+            const borderWidth = 5 + urgency * 15;
+
+            ctx.strokeStyle = ttc < 2 ? `rgba(255, 0, 0, ${0.5 + urgency * 0.5})` :
+                              ttc < 3 ? `rgba(255, 170, 0, ${0.3 + urgency * 0.4})` :
+                                        `rgba(255, 255, 0, ${0.2 + urgency * 0.3})`;
+            ctx.lineWidth = borderWidth;
+
+            ctx.strokeRect(borderWidth / 2, borderWidth / 2,
+                          width - borderWidth, height - borderWidth);
+
+            // TTC text overlay
+            ctx.fillStyle = ttc < 2 ? '#ff0000' : ttc < 3 ? '#ffaa00' : '#ffff00';
+            ctx.font = 'bold 24px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(`TTC: ${ttc.toFixed(1)}s`, cx, 40);
+            ctx.textAlign = 'left';
+
+            // Trigger audio warning
+            audioFeedback.ttcWarning(ttc);
+        }
 
         // Logging indicator
         if (state.logging) {
@@ -2355,6 +2588,32 @@
         // Motion type from 24-cell transitions
         $('metricMotionType').textContent = state.motionType || state.motionState || '--';
 
+        // Update Kalman status
+        const kalmanActive = kalman.P_orient < 0.5; // Converged
+        const kalmanEl = $('kalmanStatus');
+        if (kalmanActive) {
+            kalmanEl.classList.add('active');
+            kalmanEl.classList.remove('pending');
+        } else if (state.sensors) {
+            kalmanEl.classList.add('pending');
+            kalmanEl.classList.remove('active');
+        } else {
+            kalmanEl.classList.remove('active', 'pending');
+        }
+
+        // Update calibration status
+        const calibActive = state.calibrationSamples.length >= 20;
+        const calibEl = $('calibStatus');
+        if (calibActive) {
+            calibEl.classList.add('active');
+            calibEl.classList.remove('pending');
+        } else if (state.calibrationSamples.length > 0) {
+            calibEl.classList.add('pending');
+            calibEl.classList.remove('active');
+        } else {
+            calibEl.classList.remove('active', 'pending');
+        }
+
         drawCompass();
         drawGraph();
     }
@@ -2398,8 +2657,11 @@
         // Adaptive resolution based on motion
         updateAdaptiveScale();
 
-        // Optical flow
-        if (state.camera && video.readyState >= 2) {
+        // Smart polling - skip frames when stationary to save battery
+        const shouldProcessFlow = smartPolling.shouldProcess();
+
+        // Optical flow (only if smart polling allows)
+        if (state.camera && video.readyState >= 2 && shouldProcessFlow) {
             const w = video.videoWidth, h = video.videoHeight;
 
             // Update focal length estimate based on video size
@@ -2641,9 +2903,13 @@
 
     $('startBtn').addEventListener('click', async () => {
         if (!state.running) {
+            // Initialize audio on user interaction (required by browsers)
+            audioFeedback.init();
+
             await startCamera();
             state.running = true;
             state.lastTime = 0;
+            smartPolling.reset();
             $('startBtn').innerHTML = '<span class="btn-icon">⏹</span><span>Stop</span>';
             $('startBtn').classList.add('active');
             requestAnimationFrame(loop);
@@ -2705,8 +2971,13 @@
         state.motionState = 'STATIONARY';
         state.motionType = null;
 
+        // Reset smart polling
+        smartPolling.reset();
+
         // Reset status indicators
         $('flowStatus').classList.remove('active', 'pending');
+        $('kalmanStatus').classList.remove('active', 'pending');
+        $('calibStatus').classList.remove('active', 'pending');
     });
 
     $('moireToggle').addEventListener('click', e => {
