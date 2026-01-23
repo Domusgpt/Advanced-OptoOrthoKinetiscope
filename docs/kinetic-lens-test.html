@@ -599,6 +599,28 @@
                 </div>
 
                 <div class="panel">
+                    <div class="panel-title">Flow Decomposition</div>
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <div class="metric-label">Rotation</div>
+                            <div class="metric-value small" id="metricFlowRot">0.0<span class="metric-unit">°/s</span></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Expansion</div>
+                            <div class="metric-value small" id="metricExpansion">0.0<span class="metric-unit">/s</span></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">TTC</div>
+                            <div class="metric-value small accent" id="metricTTC">--<span class="metric-unit">s</span></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Motion Type</div>
+                            <div class="metric-value small" id="metricMotionType">--</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
                     <div class="panel-title">Rotation</div>
                     <div class="metric-grid">
                         <div class="metric-card">
@@ -1150,6 +1172,333 @@
             }
         }
     }
+
+    // =========================================================================
+    // QUATERNION-SPACE KALMAN FILTER (MEKF)
+    // =========================================================================
+
+    // Exp map: tangent vector (3D) → quaternion
+    function expMap(v) {
+        const angle = Math.sqrt(v[0]**2 + v[1]**2 + v[2]**2);
+        if (angle < 1e-8) return [1, 0, 0, 0];
+        const halfAngle = angle / 2;
+        const s = Math.sin(halfAngle) / angle;
+        return [Math.cos(halfAngle), v[0] * s, v[1] * s, v[2] * s];
+    }
+
+    // Log map: quaternion → tangent vector (3D)
+    function logMap(q) {
+        const sinHalfAngle = Math.sqrt(q[1]**2 + q[2]**2 + q[3]**2);
+        if (sinHalfAngle < 1e-8) return [0, 0, 0];
+        const angle = 2 * Math.atan2(sinHalfAngle, q[0]);
+        const s = angle / sinHalfAngle;
+        return [q[1] * s, q[2] * s, q[3] * s];
+    }
+
+    const kalman = {
+        // State: orientation quaternion
+        q: [1, 0, 0, 0],
+        // Angular velocity estimate
+        omega: [0, 0, 0],
+        // Gyro bias estimate
+        bias: [0, 0, 0],
+        // Covariance (simplified: just diagonal variances)
+        P_orient: 0.1,    // Orientation uncertainty
+        P_bias: 0.01,     // Bias uncertainty
+        // Process noise
+        Q_omega: 0.001,   // Angular velocity noise
+        Q_bias: 0.00001,  // Bias drift
+        // Measurement noise
+        R_gyro: 0.01,     // Gyroscope noise
+        R_accel: 0.1,     // Accelerometer noise (for gravity)
+        R_flow: 0.05,     // Optical flow rotation noise
+
+        predict(gyro, dt) {
+            if (dt <= 0 || dt > 0.2) return;
+
+            // Correct gyro with bias
+            const omega = [
+                gyro.x - this.bias[0],
+                gyro.y - this.bias[1],
+                gyro.z - this.bias[2]
+            ];
+            this.omega = omega;
+
+            // Predict orientation: q = q ⊗ exp(ω * dt)
+            const deltaAngle = [omega[0] * dt, omega[1] * dt, omega[2] * dt];
+            const deltaQ = expMap(deltaAngle);
+            this.q = quat.norm(quat.mult(this.q, deltaQ));
+
+            // Increase uncertainty
+            this.P_orient += this.Q_omega * dt;
+            this.P_bias += this.Q_bias * dt;
+        },
+
+        updateAccel(accel) {
+            // Use accelerometer to correct roll/pitch (gravity direction)
+            const accelMag = Math.sqrt(accel.x**2 + accel.y**2 + accel.z**2);
+            if (accelMag < 8 || accelMag > 12) return; // Not reliable
+
+            // Normalize accelerometer
+            const accelNorm = [accel.x / accelMag, accel.y / accelMag, accel.z / accelMag];
+
+            // Expected gravity in body frame (assuming world Z is up)
+            const expectedGrav = rotateVectorByQuat([0, 0, 1], this.q);
+
+            // Error: cross product gives rotation axis/magnitude
+            const error = [
+                expectedGrav[1] * accelNorm[2] - expectedGrav[2] * accelNorm[1],
+                expectedGrav[2] * accelNorm[0] - expectedGrav[0] * accelNorm[2],
+                expectedGrav[0] * accelNorm[1] - expectedGrav[1] * accelNorm[0]
+            ];
+
+            // Kalman gain (simplified)
+            const K = this.P_orient / (this.P_orient + this.R_accel);
+
+            // Apply correction
+            const correction = [error[0] * K, error[1] * K, error[2] * K];
+            const corrQ = expMap(correction);
+            this.q = quat.norm(quat.mult(corrQ, this.q));
+
+            // Update uncertainty
+            this.P_orient *= (1 - K);
+
+            // Update bias (slow)
+            this.bias[0] += error[0] * K * 0.01;
+            this.bias[1] += error[1] * K * 0.01;
+            this.bias[2] += error[2] * K * 0.01;
+        },
+
+        updateFlow(rotationFromFlow) {
+            // Use optical flow rotation to correct yaw
+            // rotationFromFlow is rad/s around Z axis
+
+            // Current yaw rate from gyro
+            const gyroYawRate = this.omega[2];
+
+            // Innovation
+            const innovation = rotationFromFlow - gyroYawRate;
+
+            // Kalman gain
+            const K = this.P_orient / (this.P_orient + this.R_flow);
+
+            // Apply yaw correction
+            const correction = expMap([0, 0, innovation * K * 0.1]);
+            this.q = quat.norm(quat.mult(correction, this.q));
+
+            // Update bias
+            this.bias[2] += innovation * K * 0.001;
+
+            this.P_orient *= (1 - K * 0.1);
+        },
+
+        getOrientation() {
+            return this.q;
+        },
+
+        reset() {
+            this.q = [1, 0, 0, 0];
+            this.omega = [0, 0, 0];
+            this.bias = [0, 0, 0];
+            this.P_orient = 0.1;
+            this.P_bias = 0.01;
+        }
+    };
+
+    // =========================================================================
+    // MULTI-RATE SENSOR FUSION
+    // =========================================================================
+
+    const multiRate = {
+        imuBuffer: [],        // Buffer IMU samples between camera frames
+        maxBufferSize: 10,
+        lastCameraTime: 0,
+
+        // Called at IMU rate (~60-100Hz)
+        onIMU(gyro, accel, timestamp) {
+            const dt = this.imuBuffer.length > 0
+                ? (timestamp - this.imuBuffer[this.imuBuffer.length - 1].timestamp) / 1000
+                : 1/60;
+
+            // Run Kalman prediction
+            kalman.predict(gyro, dt);
+
+            // Update with accelerometer when stationary
+            const gyroMag = Math.sqrt(gyro.x**2 + gyro.y**2 + gyro.z**2);
+            if (gyroMag < 0.1) {
+                kalman.updateAccel(accel);
+            }
+
+            // Buffer for camera correlation
+            this.imuBuffer.push({ gyro, accel, timestamp });
+            if (this.imuBuffer.length > this.maxBufferSize) {
+                this.imuBuffer.shift();
+            }
+        },
+
+        // Called at camera rate (~30Hz)
+        onCamera(flowDecomposition, timestamp) {
+            const dt = (timestamp - this.lastCameraTime) / 1000;
+            this.lastCameraTime = timestamp;
+
+            if (dt > 0 && dt < 0.2) {
+                // Use optical flow rotation to update Kalman
+                kalman.updateFlow(flowDecomposition.rotation);
+            }
+
+            // Predict flow from IMU buffer (for ego-motion compensation)
+            const predictedRotation = this.predictRotationFromBuffer(dt);
+
+            // Residual = object motion (not camera)
+            const residualRotation = flowDecomposition.rotation - predictedRotation;
+
+            return {
+                predicted: predictedRotation,
+                residual: residualRotation
+            };
+        },
+
+        predictRotationFromBuffer(dt) {
+            if (this.imuBuffer.length < 2) return 0;
+
+            // Integrate gyro Z from buffer
+            let totalRotation = 0;
+            for (let i = 1; i < this.imuBuffer.length; i++) {
+                const sample = this.imuBuffer[i];
+                const prevSample = this.imuBuffer[i - 1];
+                const sampleDt = (sample.timestamp - prevSample.timestamp) / 1000;
+                totalRotation += (sample.gyro.z - kalman.bias[2]) * sampleDt;
+            }
+
+            return totalRotation / dt; // Convert to rate
+        },
+
+        reset() {
+            this.imuBuffer = [];
+            this.lastCameraTime = 0;
+            kalman.reset();
+        }
+    };
+
+    // =========================================================================
+    // 24-CELL ADJACENCY GRAPH
+    // =========================================================================
+
+    // Precompute which vertices are neighbors (angular distance < 70°)
+    const CELL24_ADJACENCY = (() => {
+        const adj = [];
+        const neighborThreshold = 1.2; // ~69 degrees in radians
+
+        for (let i = 0; i < 24; i++) {
+            adj[i] = [];
+            for (let j = 0; j < 24; j++) {
+                if (i !== j) {
+                    const dist = quat.dist(HURWITZ[i], HURWITZ[j]);
+                    if (dist < neighborThreshold) {
+                        adj[i].push({
+                            vertex: j,
+                            distance: dist,
+                            // Rotation to get from i to j
+                            rotation: quat.mult(
+                                [HURWITZ[j][0], -HURWITZ[j][1], -HURWITZ[j][2], -HURWITZ[j][3]],
+                                HURWITZ[i]
+                            )
+                        });
+                    }
+                }
+            }
+            // Sort by distance
+            adj[i].sort((a, b) => a.distance - b.distance);
+        }
+        return adj;
+    })();
+
+    // Classify motion based on vertex transitions
+    function classifyVertexTransition(fromVertex, toVertex) {
+        if (fromVertex === toVertex) {
+            return { type: 'STABLE', angle: 0 };
+        }
+
+        // Check if direct neighbor
+        const neighbor = CELL24_ADJACENCY[fromVertex].find(n => n.vertex === toVertex);
+        if (neighbor) {
+            // Determine rotation type from quaternion
+            const rot = neighbor.rotation;
+            const axis = [rot[1], rot[2], rot[3]];
+            const axisMag = Math.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2);
+
+            let rotationType = 'GENERAL';
+            if (axisMag > 0.01) {
+                const normAxis = [axis[0]/axisMag, axis[1]/axisMag, axis[2]/axisMag];
+                // Check major axes
+                if (Math.abs(normAxis[0]) > 0.9) rotationType = 'ROLL';
+                else if (Math.abs(normAxis[1]) > 0.9) rotationType = 'PITCH';
+                else if (Math.abs(normAxis[2]) > 0.9) rotationType = 'YAW';
+            }
+
+            return {
+                type: 'NEIGHBOR',
+                angle: neighbor.distance * 57.2958, // degrees
+                rotationType,
+                axis: axis
+            };
+        }
+
+        // Not a direct neighbor - find shortest path
+        return {
+            type: 'DISTANT',
+            angle: quat.dist(HURWITZ[fromVertex], HURWITZ[toVertex]) * 57.2958
+        };
+    }
+
+    // Track vertex transitions for motion analysis
+    const motionClassifier = {
+        transitionHistory: [],
+        maxHistory: 20,
+
+        onTransition(fromVertex, toVertex) {
+            const classification = classifyVertexTransition(fromVertex, toVertex);
+            classification.timestamp = Date.now();
+            classification.from = fromVertex;
+            classification.to = toVertex;
+
+            this.transitionHistory.push(classification);
+            if (this.transitionHistory.length > this.maxHistory) {
+                this.transitionHistory.shift();
+            }
+
+            return classification;
+        },
+
+        getRecentMotionType() {
+            if (this.transitionHistory.length < 2) return 'STATIONARY';
+
+            const recent = this.transitionHistory.slice(-5);
+            const types = recent.map(t => t.rotationType).filter(t => t);
+
+            // Count rotation types
+            const counts = {};
+            for (const t of types) {
+                counts[t] = (counts[t] || 0) + 1;
+            }
+
+            // Return dominant type
+            let maxType = 'MIXED';
+            let maxCount = 0;
+            for (const [type, count] of Object.entries(counts)) {
+                if (count > maxCount) {
+                    maxCount = count;
+                    maxType = type;
+                }
+            }
+
+            return maxType;
+        },
+
+        reset() {
+            this.transitionHistory = [];
+        }
+    };
 
     // =========================================================================
     // IMAGE PROCESSING UTILITIES
@@ -1988,6 +2337,24 @@
         confBar.style.width = conf + '%';
         confBar.className = 'progress-fill' + (conf < 30 ? ' error' : conf < 60 ? ' warning' : '');
 
+        // Flow decomposition metrics
+        const decomp = state.flowDecomposition;
+        $('metricFlowRot').innerHTML = (decomp.rotation * 57.2958).toFixed(1) + '<span class="metric-unit">°/s</span>';
+        $('metricExpansion').innerHTML = decomp.expansion.toFixed(2) + '<span class="metric-unit">/s</span>';
+
+        // TTC with color coding
+        const ttcEl = $('metricTTC');
+        if (decomp.ttc < 100) {
+            ttcEl.innerHTML = decomp.ttc.toFixed(1) + '<span class="metric-unit">s</span>';
+            ttcEl.style.color = decomp.ttc < 2 ? 'var(--error)' : decomp.ttc < 5 ? 'var(--warning)' : 'var(--accent)';
+        } else {
+            ttcEl.innerHTML = '--<span class="metric-unit">s</span>';
+            ttcEl.style.color = 'var(--text-dim)';
+        }
+
+        // Motion type from 24-cell transitions
+        $('metricMotionType').textContent = state.motionType || state.motionState || '--';
+
         drawCompass();
         drawGraph();
     }
@@ -2005,17 +2372,28 @@
         state.frameTime = dt;
         state.fps = dt > 0 ? (state.fps * 0.9 + (1 / dt) * 0.1) : state.fps;
 
-        // IMU integration
+        // IMU integration (dual: simple + Kalman)
         if (state.sensors && dt > 0 && dt < 0.2) {
+            // Simple complementary filter (fast, for display)
             imu.update(state.gyro, state.accel, dt);
-            state.orientation = imu.orientation;
+
+            // Use Kalman filter orientation (more accurate)
+            state.orientation = kalman.getOrientation();
 
             // Gravity compensation for accelerometer
             updateGravityCompensation();
         }
 
         // 24-cell quantization with hysteresis filtering
+        const prevVertex = state.nearestVertex;
         latticeFilter.update(state.orientation);
+
+        // Track vertex transitions for motion classification
+        if (state.nearestVertex !== prevVertex) {
+            const transition = motionClassifier.onTransition(prevVertex, state.nearestVertex);
+            state.lastTransition = transition;
+            state.motionType = motionClassifier.getRecentMotionType();
+        }
 
         // Adaptive resolution based on motion
         updateAdaptiveScale();
@@ -2101,6 +2479,11 @@
                 // Flow field decomposition
                 const cx = w / 2, cy = h / 2;
                 decomposeFlowField(state.flowField, cx, cy, state.focalLength);
+
+                // Multi-rate fusion: correlate camera with buffered IMU
+                const fusionResult = multiRate.onCamera(state.flowDecomposition, performance.now());
+                state.predictedRotation = fusionResult.predicted;
+                state.residualRotation = fusionResult.residual;
 
                 // Add forward velocity from expansion (time-to-collision)
                 if (state.flowDecomposition.expansion > 0.01) {
@@ -2233,6 +2616,12 @@
                     z: e.accelerationIncludingGravity.z || 0
                 };
             }
+
+            // Feed into multi-rate fusion system
+            if (state.running) {
+                multiRate.onIMU(state.gyro, state.accel, performance.now());
+            }
+
             if (!state.sensors) {
                 state.sensors = true;
                 $('imuStatus').classList.add('active');
@@ -2275,13 +2664,16 @@
         state.flowField = [];
         state.flowMean = { x: 0, y: 0 };
         state.flowMagnitude = 0;
-        state.velocity = { x: 0, y: 0 };
+        state.velocity = { x: 0, y: 0, z: 0 };
         state.speed = 0;
         state.rawSpeed = 0;
         state.speedHistory.fill(0);
         state.orientation = [1, 0, 0, 0];
         state.quantizedOrientation = [1, 0, 0, 0];
         state.nearestVertex = 0;
+        state.vertexConfidence = 1.0;
+        state.lastVertex = 0;
+        state.vertexStableFrames = 0;
         moirePhaseAccum = 0;
 
         // Reset feature tracking
@@ -2290,6 +2682,28 @@
         state.motionTrails = [];
         state.egoMotion = { x: 0, y: 0, rotation: 0 };
         state.objectMotion = { x: 0, y: 0 };
+
+        // Reset flow decomposition
+        state.flowDecomposition = {
+            translation: { x: 0, y: 0 },
+            rotation: 0,
+            expansion: 0,
+            ttc: Infinity
+        };
+
+        // Reset Kalman filter and multi-rate fusion
+        kalman.reset();
+        multiRate.reset();
+        motionClassifier.reset();
+
+        // Reset calibration
+        state.calibrationSamples = [];
+        state.accelVelocity = { x: 0, y: 0, z: 0 };
+        state.linearAccel = { x: 0, y: 0, z: 0 };
+
+        // Reset motion state
+        state.motionState = 'STATIONARY';
+        state.motionType = null;
 
         // Reset status indicators
         $('flowStatus').classList.remove('active', 'pending');
