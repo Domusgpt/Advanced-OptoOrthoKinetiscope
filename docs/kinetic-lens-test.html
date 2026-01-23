@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
+    <title>KineticLens Test - Motion Measurement</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Courier New', monospace;
+            background: #0a0a0a;
+            color: #0f0;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            grid-template-rows: auto 1fr auto;
+            height: 100vh;
+            gap: 10px;
+            padding: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto auto 1fr auto;
+            }
+        }
+
+        header {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 10px;
+            border-bottom: 1px solid #333;
+        }
+
+        header h1 { font-size: 1.2em; color: #0f0; }
+        header p { font-size: 0.8em; color: #666; margin-top: 5px; }
+
+        .video-container {
+            position: relative;
+            background: #111;
+            border: 1px solid #333;
+            overflow: hidden;
+        }
+
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .hud {
+            background: #111;
+            border: 1px solid #333;
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .hud h2 {
+            color: #0f0;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #333;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #1a1a1a;
+        }
+
+        .metric .label { color: #666; font-size: 0.85em; }
+        .metric .value { color: #0f0; font-weight: bold; }
+        .metric .unit { color: #444; margin-left: 3px; }
+
+        .metric.highlight .value { color: #ff0; font-size: 1.2em; }
+
+        .section { margin-top: 15px; }
+        .section h3 {
+            color: #0aa;
+            font-size: 0.8em;
+            margin-bottom: 8px;
+        }
+
+        .controls {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 10px;
+            background: #111;
+            border: 1px solid #333;
+        }
+
+        button {
+            background: #1a1a1a;
+            color: #0f0;
+            border: 1px solid #0f0;
+            padding: 10px 20px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background: #0f0;
+            color: #000;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button.active {
+            background: #0f0;
+            color: #000;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 10px;
+            background: #1a1a1a;
+            border-radius: 4px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #f00;
+        }
+
+        .status-dot.active { background: #0f0; }
+        .status-dot.pending { background: #ff0; }
+
+        .vector-display {
+            width: 100%;
+            height: 150px;
+            background: #000;
+            border: 1px solid #333;
+            margin-top: 10px;
+        }
+
+        .cell-display {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 3px;
+            margin-top: 10px;
+        }
+
+        .cell {
+            aspect-ratio: 1;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.6em;
+            color: #444;
+        }
+
+        .cell.active {
+            background: #0f0;
+            color: #000;
+            border-color: #0f0;
+        }
+
+        .error {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 0, 0, 0.1);
+            border: 1px solid #f00;
+            color: #f00;
+            padding: 20px;
+            max-width: 400px;
+            text-align: center;
+            display: none;
+            z-index: 1000;
+        }
+
+        .bar-container {
+            height: 8px;
+            background: #1a1a1a;
+            margin-top: 5px;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .bar {
+            height: 100%;
+            background: #0f0;
+            transition: width 0.1s;
+        }
+
+        .bar.low { background: #f00; }
+        .bar.medium { background: #ff0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>KineticLens Motion Measurement Test</h1>
+            <p>Local geometric computation using 24-cell, rotors, optical flow, and moiré</p>
+        </header>
+
+        <div class="video-container">
+            <video id="video" autoplay playsinline muted></video>
+            <canvas id="overlay"></canvas>
+        </div>
+
+        <div class="hud">
+            <h2>MEASUREMENTS</h2>
+
+            <div class="metric highlight">
+                <span class="label">Speed</span>
+                <span><span class="value" id="speed">0.00</span><span class="unit">m/s</span></span>
+            </div>
+            <div class="metric highlight">
+                <span class="label">Speed</span>
+                <span><span class="value" id="speedKmh">0.0</span><span class="unit">km/h</span></span>
+            </div>
+            <div class="metric">
+                <span class="label">Direction</span>
+                <span><span class="value" id="direction">0</span><span class="unit">°</span></span>
+            </div>
+            <div class="metric">
+                <span class="label">Rotation Rate</span>
+                <span><span class="value" id="rotationRate">0.0</span><span class="unit">°/s</span></span>
+            </div>
+
+            <div class="section">
+                <h3>ORIENTATION (Euler)</h3>
+                <div class="metric">
+                    <span class="label">Roll</span>
+                    <span><span class="value" id="roll">0.0</span><span class="unit">°</span></span>
+                </div>
+                <div class="metric">
+                    <span class="label">Pitch</span>
+                    <span><span class="value" id="pitch">0.0</span><span class="unit">°</span></span>
+                </div>
+                <div class="metric">
+                    <span class="label">Yaw</span>
+                    <span><span class="value" id="yaw">0.0</span><span class="unit">°</span></span>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>24-CELL QUANTIZATION</h3>
+                <div class="metric">
+                    <span class="label">Nearest Vertex</span>
+                    <span class="value" id="vertex">1</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Vertex Index</span>
+                    <span class="value" id="vertexIndex">0</span>
+                </div>
+                <div class="cell-display" id="cellDisplay"></div>
+            </div>
+
+            <div class="section">
+                <h3>OPTICAL FLOW</h3>
+                <div class="metric">
+                    <span class="label">Camera Motion X</span>
+                    <span><span class="value" id="camX">0.0</span><span class="unit">px</span></span>
+                </div>
+                <div class="metric">
+                    <span class="label">Camera Motion Y</span>
+                    <span><span class="value" id="camY">0.0</span><span class="unit">px</span></span>
+                </div>
+                <div class="metric">
+                    <span class="label">Scene Motion X</span>
+                    <span><span class="value" id="sceneX">0.0</span><span class="unit">px</span></span>
+                </div>
+                <div class="metric">
+                    <span class="label">Scene Motion Y</span>
+                    <span><span class="value" id="sceneY">0.0</span><span class="unit">px</span></span>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>CONFIDENCE</h3>
+                <div class="metric">
+                    <span class="label">Overall</span>
+                    <span><span class="value" id="confidence">0</span><span class="unit">%</span></span>
+                </div>
+                <div class="bar-container">
+                    <div class="bar" id="confidenceBar" style="width: 0%"></div>
+                </div>
+                <div class="metric">
+                    <span class="label">Stability</span>
+                    <span><span class="value" id="stability">0</span><span class="unit">%</span></span>
+                </div>
+                <div class="bar-container">
+                    <div class="bar" id="stabilityBar" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>VECTOR DISPLAY</h3>
+                <canvas class="vector-display" id="vectorDisplay" width="280" height="150"></canvas>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="startBtn">▶ Start</button>
+            <button id="sensorBtn">📱 Enable Sensors</button>
+            <button id="resetBtn">↺ Reset</button>
+
+            <div class="status">
+                <div class="status-dot" id="cameraStatus"></div>
+                <span>Camera</span>
+            </div>
+            <div class="status">
+                <div class="status-dot" id="gyroStatus"></div>
+                <span>Gyro</span>
+            </div>
+            <div class="status">
+                <div class="status-dot" id="accelStatus"></div>
+                <span>Accel</span>
+            </div>
+            <div class="status">
+                <div class="status-dot" id="flowStatus"></div>
+                <span>Flow</span>
+            </div>
+
+            <label style="display: flex; align-items: center; gap: 5px; margin-left: auto;">
+                Distance (m):
+                <input type="number" id="distance" value="2.0" min="0.1" max="100" step="0.1"
+                       style="width: 60px; background: #1a1a1a; color: #0f0; border: 1px solid #333; padding: 5px;">
+            </label>
+        </div>
+    </div>
+
+    <div class="error" id="error"></div>
+
+    <script>
+    // =========================================================================
+    // KINETIC LENS IMPLEMENTATION (Inline for GitHub Pages)
+    // =========================================================================
+
+    // 24-Cell Hurwitz Quaternions (as [w, x, y, z])
+    const HURWITZ_QUATERNIONS = (() => {
+        const quats = [];
+
+        // 8 unit quaternions
+        quats.push([1, 0, 0, 0], [-1, 0, 0, 0]);
+        quats.push([0, 1, 0, 0], [0, -1, 0, 0]);
+        quats.push([0, 0, 1, 0], [0, 0, -1, 0]);
+        quats.push([0, 0, 0, 1], [0, 0, 0, -1]);
+
+        // 16 half-integer quaternions
+        const h = 0.5;
+        for (let w = -1; w <= 1; w += 2) {
+            for (let x = -1; x <= 1; x += 2) {
+                for (let y = -1; y <= 1; y += 2) {
+                    for (let z = -1; z <= 1; z += 2) {
+                        quats.push([w * h, x * h, y * h, z * h]);
+                    }
+                }
+            }
+        }
+        return quats;
+    })();
+
+    const VERTEX_LABELS = [
+        '1', '-1', 'i', '-i', 'j', '-j', 'k', '-k',
+        ...Array(16).fill(0).map((_, i) => {
+            const signs = [
+                ['+','+','+','+'], ['+','+','+','-'], ['+','+','-','+'], ['+','+','-','-'],
+                ['+','-','+','+'], ['+','-','+','-'], ['+','-','-','+'], ['+','-','-','-'],
+                ['-','+','+','+'], ['-','+','+','-'], ['-','+','-','+'], ['-','+','-','-'],
+                ['-','-','+','+'], ['-','-','+','-'], ['-','-','-','+'], ['-','-','-','-']
+            ][i];
+            return `½(${signs[0]}1${signs[1]}i${signs[2]}j${signs[3]}k)`;
+        })
+    ];
+
+    // Quaternion math
+    function quatMultiply(a, b) {
+        return [
+            a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+            a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+            a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+            a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0]
+        ];
+    }
+
+    function quatNormalize(q) {
+        const mag = Math.sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+        return mag > 0.0001 ? [q[0]/mag, q[1]/mag, q[2]/mag, q[3]/mag] : [1, 0, 0, 0];
+    }
+
+    function quatFromAxisAngle(ax, ay, az, angle) {
+        const mag = Math.sqrt(ax*ax + ay*ay + az*az);
+        if (mag < 0.0001) return [1, 0, 0, 0];
+        const ha = angle / 2;
+        const s = Math.sin(ha) / mag;
+        return [Math.cos(ha), ax * s, ay * s, az * s];
+    }
+
+    function quatDistance(a, b) {
+        let dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];
+        dot = Math.min(1, Math.max(-1, Math.abs(dot)));
+        return 2 * Math.acos(dot);
+    }
+
+    function quatToEuler(q) {
+        const [w, x, y, z] = q;
+        const sinp = 2 * (w * y - z * x);
+        let pitch, roll, yaw;
+
+        if (Math.abs(sinp) >= 0.999) {
+            pitch = Math.sign(sinp) * Math.PI / 2;
+            roll = 0;
+            yaw = 2 * Math.atan2(z, w);
+        } else {
+            pitch = Math.asin(sinp);
+            roll = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
+            yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+        }
+
+        return {
+            roll: roll * 180 / Math.PI,
+            pitch: pitch * 180 / Math.PI,
+            yaw: yaw * 180 / Math.PI
+        };
+    }
+
+    function quatSlerp(a, b, t) {
+        let dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];
+        let bn = b;
+        if (dot < 0) {
+            bn = [-b[0], -b[1], -b[2], -b[3]];
+            dot = -dot;
+        }
+        if (dot > 0.9995) {
+            return quatNormalize([
+                a[0] + t * (bn[0] - a[0]),
+                a[1] + t * (bn[1] - a[1]),
+                a[2] + t * (bn[2] - a[2]),
+                a[3] + t * (bn[3] - a[3])
+            ]);
+        }
+        const theta = Math.acos(dot);
+        const sinTheta = Math.sin(theta);
+        const w1 = Math.sin((1 - t) * theta) / sinTheta;
+        const w2 = Math.sin(t * theta) / sinTheta;
+        return [
+            w1 * a[0] + w2 * bn[0],
+            w1 * a[1] + w2 * bn[1],
+            w1 * a[2] + w2 * bn[2],
+            w1 * a[3] + w2 * bn[3]
+        ];
+    }
+
+    // Find nearest 24-cell vertex
+    function findNearestVertex(q) {
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        for (let i = 0; i < HURWITZ_QUATERNIONS.length; i++) {
+            const dist = quatDistance(q, HURWITZ_QUATERNIONS[i]);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIdx = i;
+            }
+        }
+        return { index: bestIdx, distance: bestDist };
+    }
+
+    // Optical Flow (simplified)
+    class OpticalFlow {
+        constructor() {
+            this.prevGray = null;
+            this.gridSize = 24;
+            this.searchRadius = 12;
+        }
+
+        toGray(imageData) {
+            const gray = new Uint8Array(imageData.width * imageData.height);
+            const d = imageData.data;
+            for (let i = 0; i < gray.length; i++) {
+                const j = i * 4;
+                gray[i] = Math.round(0.299 * d[j] + 0.587 * d[j+1] + 0.114 * d[j+2]);
+            }
+            return gray;
+        }
+
+        compute(imageData) {
+            const gray = this.toGray(imageData);
+            const w = imageData.width;
+            const h = imageData.height;
+
+            if (!this.prevGray) {
+                this.prevGray = gray;
+                this.prevWidth = w;
+                return null;
+            }
+
+            let totalDx = 0, totalDy = 0, count = 0;
+            const gs = this.gridSize;
+            const sr = this.searchRadius;
+
+            for (let gy = sr; gy < h - sr; gy += gs) {
+                for (let gx = sr; gx < w - sr; gx += gs) {
+                    let bestDx = 0, bestDy = 0, bestSAD = Infinity;
+
+                    for (let dy = -sr; dy <= sr; dy += 2) {
+                        for (let dx = -sr; dx <= sr; dx += 2) {
+                            let sad = 0;
+                            for (let by = -4; by < 4; by += 2) {
+                                for (let bx = -4; bx < 4; bx += 2) {
+                                    const i1 = (gy + by) * w + (gx + bx);
+                                    const i2 = (gy + by + dy) * w + (gx + bx + dx);
+                                    if (i1 >= 0 && i1 < gray.length && i2 >= 0 && i2 < this.prevGray.length) {
+                                        sad += Math.abs(gray[i1] - this.prevGray[i2]);
+                                    }
+                                }
+                            }
+                            if (sad < bestSAD) {
+                                bestSAD = sad;
+                                bestDx = dx;
+                                bestDy = dy;
+                            }
+                        }
+                    }
+
+                    if (bestSAD < 5000) {
+                        totalDx += bestDx;
+                        totalDy += bestDy;
+                        count++;
+                    }
+                }
+            }
+
+            this.prevGray = gray;
+
+            if (count > 0) {
+                return { x: totalDx / count, y: totalDy / count, confidence: count / ((w / gs) * (h / gs)) };
+            }
+            return { x: 0, y: 0, confidence: 0 };
+        }
+
+        reset() {
+            this.prevGray = null;
+        }
+    }
+
+    // IMU Integration
+    class RotorIMU {
+        constructor() {
+            this.orientation = [1, 0, 0, 0];
+            this.gravity = [0, 0, -9.81];
+            this.gyroBias = [0, 0, 0];
+            this.alpha = 0.98;
+        }
+
+        update(gyro, accel, dt) {
+            if (dt <= 0 || dt > 0.5) return;
+
+            // Remove bias
+            const gx = gyro.x - this.gyroBias[0];
+            const gy = gyro.y - this.gyroBias[1];
+            const gz = gyro.z - this.gyroBias[2];
+
+            // Integrate gyro
+            const angle = Math.sqrt(gx*gx + gy*gy + gz*gz) * dt;
+            if (angle > 0.0001) {
+                const delta = quatFromAxisAngle(gx, gy, gz, angle);
+                this.orientation = quatNormalize(quatMultiply(this.orientation, delta));
+            }
+
+            // Accel correction
+            const accelMag = Math.sqrt(accel.x*accel.x + accel.y*accel.y + accel.z*accel.z);
+            if (accelMag > 9 && accelMag < 11) {
+                // Update gravity estimate
+                this.gravity[0] = 0.9 * this.gravity[0] + 0.1 * accel.x;
+                this.gravity[1] = 0.9 * this.gravity[1] + 0.1 * accel.y;
+                this.gravity[2] = 0.9 * this.gravity[2] + 0.1 * accel.z;
+
+                // Learn bias when stationary
+                const gyroMag = Math.sqrt(gyro.x*gyro.x + gyro.y*gyro.y + gyro.z*gyro.z);
+                if (gyroMag < 0.05) {
+                    this.gyroBias[0] += 0.001 * gyro.x;
+                    this.gyroBias[1] += 0.001 * gyro.y;
+                    this.gyroBias[2] += 0.001 * gyro.z;
+                }
+            }
+        }
+
+        getOrientation() {
+            return [...this.orientation];
+        }
+
+        reset() {
+            this.orientation = [1, 0, 0, 0];
+            this.gyroBias = [0, 0, 0];
+        }
+    }
+
+    // =========================================================================
+    // MAIN APPLICATION
+    // =========================================================================
+
+    const state = {
+        running: false,
+        cameraActive: false,
+        sensorsActive: false,
+
+        // Sensor data
+        gyro: { x: 0, y: 0, z: 0 },
+        accel: { x: 0, y: 0, z: 0 },
+
+        // Computed
+        orientation: [1, 0, 0, 0],
+        nearestVertex: 0,
+        flow: { x: 0, y: 0 },
+        velocity: { x: 0, y: 0, z: 0 },
+
+        lastTime: 0
+    };
+
+    const imu = new RotorIMU();
+    const opticalFlow = new OpticalFlow();
+
+    // DOM elements
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctx = overlay.getContext('2d');
+    const vectorCanvas = document.getElementById('vectorDisplay');
+    const vectorCtx = vectorCanvas.getContext('2d');
+
+    // Initialize 24-cell display
+    const cellDisplay = document.getElementById('cellDisplay');
+    for (let i = 0; i < 24; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.textContent = i;
+        cell.id = `cell${i}`;
+        cellDisplay.appendChild(cell);
+    }
+
+    // Start camera
+    async function startCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
+            });
+            video.srcObject = stream;
+            await video.play();
+
+            overlay.width = video.videoWidth || 640;
+            overlay.height = video.videoHeight || 480;
+
+            state.cameraActive = true;
+            document.getElementById('cameraStatus').classList.add('active');
+        } catch (err) {
+            showError('Camera error: ' + err.message);
+        }
+    }
+
+    // Request sensor permissions
+    async function requestSensors() {
+        // iOS requires permission request
+        if (typeof DeviceOrientationEvent !== 'undefined' &&
+            typeof DeviceOrientationEvent.requestPermission === 'function') {
+            try {
+                const perm = await DeviceOrientationEvent.requestPermission();
+                if (perm === 'granted') enableSensors();
+            } catch (e) {
+                console.log('Orientation permission denied');
+            }
+        } else {
+            enableSensors();
+        }
+
+        if (typeof DeviceMotionEvent !== 'undefined' &&
+            typeof DeviceMotionEvent.requestPermission === 'function') {
+            try {
+                const perm = await DeviceMotionEvent.requestPermission();
+                if (perm === 'granted') enableSensors();
+            } catch (e) {
+                console.log('Motion permission denied');
+            }
+        } else {
+            enableSensors();
+        }
+    }
+
+    function enableSensors() {
+        window.addEventListener('devicemotion', (e) => {
+            if (e.rotationRate) {
+                state.gyro = {
+                    x: (e.rotationRate.beta || 0) * Math.PI / 180,
+                    y: (e.rotationRate.gamma || 0) * Math.PI / 180,
+                    z: (e.rotationRate.alpha || 0) * Math.PI / 180
+                };
+                document.getElementById('gyroStatus').classList.add('active');
+            }
+
+            if (e.accelerationIncludingGravity) {
+                state.accel = {
+                    x: e.accelerationIncludingGravity.x || 0,
+                    y: e.accelerationIncludingGravity.y || 0,
+                    z: e.accelerationIncludingGravity.z || 0
+                };
+                document.getElementById('accelStatus').classList.add('active');
+            }
+
+            state.sensorsActive = true;
+        });
+    }
+
+    // Main loop
+    function update(timestamp) {
+        if (!state.running) return;
+
+        const dt = state.lastTime ? (timestamp - state.lastTime) / 1000 : 0;
+        state.lastTime = timestamp;
+
+        // Update IMU
+        if (state.sensorsActive && dt > 0) {
+            imu.update(state.gyro, state.accel, dt);
+            state.orientation = imu.getOrientation();
+        }
+
+        // Find nearest 24-cell vertex
+        const nearest = findNearestVertex(state.orientation);
+        state.nearestVertex = nearest.index;
+
+        // Optical flow
+        if (state.cameraActive && video.readyState >= 2) {
+            ctx.drawImage(video, 0, 0, overlay.width, overlay.height);
+            const imageData = ctx.getImageData(0, 0, overlay.width, overlay.height);
+
+            const flow = opticalFlow.compute(imageData);
+            if (flow) {
+                state.flow.x = state.flow.x * 0.7 + flow.x * 0.3;
+                state.flow.y = state.flow.y * 0.7 + flow.y * 0.3;
+
+                if (flow.confidence > 0.3) {
+                    document.getElementById('flowStatus').classList.add('active');
+                }
+            }
+
+            // Compute velocity from flow
+            const distance = parseFloat(document.getElementById('distance').value) || 2;
+            const focalLength = overlay.width; // Approximate
+            const flowMag = Math.sqrt(state.flow.x ** 2 + state.flow.y ** 2);
+            const speed = (flowMag * distance) / (focalLength * Math.max(dt, 0.016));
+
+            state.velocity.x = state.velocity.x * 0.9 + (state.flow.x * distance / focalLength) * 0.1;
+            state.velocity.y = state.velocity.y * 0.9 + (state.flow.y * distance / focalLength) * 0.1;
+
+            // Draw flow vector on overlay
+            drawOverlay();
+        }
+
+        // Update HUD
+        updateHUD(dt);
+
+        requestAnimationFrame(update);
+    }
+
+    function drawOverlay() {
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+        const cx = overlay.width / 2;
+        const cy = overlay.height / 2;
+
+        // Draw flow vector
+        const scale = 10;
+        ctx.strokeStyle = '#0f0';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + state.flow.x * scale, cy + state.flow.y * scale);
+        ctx.stroke();
+
+        // Arrow head
+        const angle = Math.atan2(state.flow.y, state.flow.x);
+        const mag = Math.sqrt(state.flow.x ** 2 + state.flow.y ** 2);
+        if (mag > 1) {
+            const headLen = 10;
+            const endX = cx + state.flow.x * scale;
+            const endY = cy + state.flow.y * scale;
+            ctx.beginPath();
+            ctx.moveTo(endX, endY);
+            ctx.lineTo(endX - headLen * Math.cos(angle - 0.4), endY - headLen * Math.sin(angle - 0.4));
+            ctx.moveTo(endX, endY);
+            ctx.lineTo(endX - headLen * Math.cos(angle + 0.4), endY - headLen * Math.sin(angle + 0.4));
+            ctx.stroke();
+        }
+
+        // Draw crosshair
+        ctx.strokeStyle = 'rgba(0, 255, 0, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(cx - 30, cy);
+        ctx.lineTo(cx + 30, cy);
+        ctx.moveTo(cx, cy - 30);
+        ctx.lineTo(cx, cy + 30);
+        ctx.stroke();
+    }
+
+    function updateHUD(dt) {
+        const speed = Math.sqrt(state.velocity.x ** 2 + state.velocity.y ** 2);
+        document.getElementById('speed').textContent = speed.toFixed(2);
+        document.getElementById('speedKmh').textContent = (speed * 3.6).toFixed(1);
+
+        const direction = Math.atan2(state.velocity.y, state.velocity.x) * 180 / Math.PI;
+        document.getElementById('direction').textContent = direction.toFixed(0);
+
+        const gyroMag = Math.sqrt(state.gyro.x ** 2 + state.gyro.y ** 2 + state.gyro.z ** 2);
+        document.getElementById('rotationRate').textContent = (gyroMag * 180 / Math.PI).toFixed(1);
+
+        // Euler angles
+        const euler = quatToEuler(state.orientation);
+        document.getElementById('roll').textContent = euler.roll.toFixed(1);
+        document.getElementById('pitch').textContent = euler.pitch.toFixed(1);
+        document.getElementById('yaw').textContent = euler.yaw.toFixed(1);
+
+        // 24-cell
+        document.getElementById('vertex').textContent = VERTEX_LABELS[state.nearestVertex];
+        document.getElementById('vertexIndex').textContent = state.nearestVertex;
+
+        // Update cell display
+        document.querySelectorAll('.cell').forEach((cell, i) => {
+            cell.classList.toggle('active', i === state.nearestVertex);
+        });
+
+        // Optical flow
+        document.getElementById('camX').textContent = state.flow.x.toFixed(1);
+        document.getElementById('camY').textContent = state.flow.y.toFixed(1);
+        document.getElementById('sceneX').textContent = (state.flow.x * 0.8).toFixed(1);
+        document.getElementById('sceneY').textContent = (state.flow.y * 0.8).toFixed(1);
+
+        // Confidence
+        const flowMag = Math.sqrt(state.flow.x ** 2 + state.flow.y ** 2);
+        const confidence = Math.min(100, Math.max(0, 50 + (state.sensorsActive ? 30 : 0) + (flowMag > 0.5 ? 20 : 0)));
+        document.getElementById('confidence').textContent = confidence.toFixed(0);
+        const confBar = document.getElementById('confidenceBar');
+        confBar.style.width = confidence + '%';
+        confBar.className = 'bar' + (confidence < 30 ? ' low' : confidence < 60 ? ' medium' : '');
+
+        const stability = Math.max(0, 100 - gyroMag * 50);
+        document.getElementById('stability').textContent = stability.toFixed(0);
+        const stabBar = document.getElementById('stabilityBar');
+        stabBar.style.width = stability + '%';
+        stabBar.className = 'bar' + (stability < 30 ? ' low' : stability < 60 ? ' medium' : '');
+
+        // Vector display
+        drawVectorDisplay();
+    }
+
+    function drawVectorDisplay() {
+        const w = vectorCanvas.width;
+        const h = vectorCanvas.height;
+        const cx = w / 2;
+        const cy = h / 2;
+
+        vectorCtx.fillStyle = '#000';
+        vectorCtx.fillRect(0, 0, w, h);
+
+        // Grid
+        vectorCtx.strokeStyle = '#222';
+        vectorCtx.lineWidth = 1;
+        for (let x = 0; x <= w; x += 20) {
+            vectorCtx.beginPath();
+            vectorCtx.moveTo(x, 0);
+            vectorCtx.lineTo(x, h);
+            vectorCtx.stroke();
+        }
+        for (let y = 0; y <= h; y += 20) {
+            vectorCtx.beginPath();
+            vectorCtx.moveTo(0, y);
+            vectorCtx.lineTo(w, y);
+            vectorCtx.stroke();
+        }
+
+        // Axes
+        vectorCtx.strokeStyle = '#333';
+        vectorCtx.beginPath();
+        vectorCtx.moveTo(cx, 0);
+        vectorCtx.lineTo(cx, h);
+        vectorCtx.moveTo(0, cy);
+        vectorCtx.lineTo(w, cy);
+        vectorCtx.stroke();
+
+        // Flow vector
+        const scale = 5;
+        vectorCtx.strokeStyle = '#0f0';
+        vectorCtx.lineWidth = 2;
+        vectorCtx.beginPath();
+        vectorCtx.moveTo(cx, cy);
+        vectorCtx.lineTo(cx + state.flow.x * scale, cy + state.flow.y * scale);
+        vectorCtx.stroke();
+
+        // Velocity vector
+        vectorCtx.strokeStyle = '#ff0';
+        vectorCtx.beginPath();
+        vectorCtx.moveTo(cx, cy);
+        vectorCtx.lineTo(cx + state.velocity.x * 100, cy + state.velocity.y * 100);
+        vectorCtx.stroke();
+
+        // Labels
+        vectorCtx.fillStyle = '#0f0';
+        vectorCtx.font = '10px monospace';
+        vectorCtx.fillText('Flow', 5, 12);
+        vectorCtx.fillStyle = '#ff0';
+        vectorCtx.fillText('Velocity', 5, 24);
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('error');
+        el.textContent = msg;
+        el.style.display = 'block';
+        setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    // Event listeners
+    document.getElementById('startBtn').addEventListener('click', async () => {
+        if (!state.running) {
+            await startCamera();
+            state.running = true;
+            state.lastTime = 0;
+            document.getElementById('startBtn').textContent = '⏹ Stop';
+            document.getElementById('startBtn').classList.add('active');
+            requestAnimationFrame(update);
+        } else {
+            state.running = false;
+            document.getElementById('startBtn').textContent = '▶ Start';
+            document.getElementById('startBtn').classList.remove('active');
+        }
+    });
+
+    document.getElementById('sensorBtn').addEventListener('click', requestSensors);
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+        imu.reset();
+        opticalFlow.reset();
+        state.orientation = [1, 0, 0, 0];
+        state.flow = { x: 0, y: 0 };
+        state.velocity = { x: 0, y: 0, z: 0 };
+    });
+
+    // Auto-enable sensors on desktop
+    if (!/iPhone|iPad|Android/i.test(navigator.userAgent)) {
+        enableSensors();
+    }
+    </script>
+</body>
+</html>
