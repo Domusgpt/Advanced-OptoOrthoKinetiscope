@@ -740,15 +740,27 @@
 
         gyro: { x: 0, y: 0, z: 0 },
         accel: { x: 0, y: 0, z: 0 },
+        linearAccel: { x: 0, y: 0, z: 0 }, // Gravity-compensated
 
         orientation: [1, 0, 0, 0],
         quantizedOrientation: [1, 0, 0, 0], // Smoothed via 24-cell
         nearestVertex: 0,
+        vertexConfidence: 1.0,
+        lastVertex: 0,
+        vertexStableFrames: 0,
 
         // Flow field - grid of vectors
         flowField: [],
         flowMean: { x: 0, y: 0 },
         flowMagnitude: 0,
+
+        // Flow decomposition
+        flowDecomposition: {
+            translation: { x: 0, y: 0 },  // Lateral motion
+            rotation: 0,                   // Rotation around optical axis
+            expansion: 0,                  // Forward/backward motion
+            ttc: Infinity                  // Time to collision
+        },
 
         // Feature tracking
         features: [],           // Detected corner features
@@ -756,7 +768,7 @@
         motionTrails: [],       // Trail history for visualization
 
         // Velocity in m/s (computed from flow + calibration)
-        velocity: { x: 0, y: 0 },
+        velocity: { x: 0, y: 0, z: 0 }, // Added z for forward
         speed: 0,
         rawSpeed: 0, // Unsmoothed for responsiveness display
         speedHistory: new Array(60).fill(0),
@@ -775,11 +787,19 @@
         // Calibration
         focalLength: 800, // pixels (updated from video)
         pixelsPerMeter: 400, // at reference distance
+        autoCalibrating: false,
+        calibrationSamples: [],
 
-        // Processing settings
-        processScale: 0.5,      // Downsample ratio for flow (0.5 = half res)
+        // Adaptive processing
+        processScale: 0.5,      // Current downsample ratio
+        targetScale: 0.5,       // Target scale (smoothly transitions)
+        motionState: 'STATIONARY', // STATIONARY, MOVING, FAST
         maxFeatures: 100,       // Max features to track
         trailLength: 20,        // Motion trail history length
+
+        // Accelerometer integration for calibration
+        accelVelocity: { x: 0, y: 0, z: 0 },
+        accelDisplacement: { x: 0, y: 0, z: 0 },
 
         // Data logging
         dataLog: [],
@@ -899,6 +919,237 @@
             this.bias = [0, 0, 0];
         }
     };
+
+    // =========================================================================
+    // ADAPTIVE RESOLUTION
+    // =========================================================================
+
+    function updateAdaptiveScale() {
+        const motion = Math.max(state.flowMagnitude, state.gyro.x**2 + state.gyro.y**2 + state.gyro.z**2);
+
+        // Determine target scale based on motion
+        if (motion < 1) {
+            state.targetScale = 1.0;      // Slow motion: full resolution
+            state.motionState = 'STATIONARY';
+        } else if (motion < 5) {
+            state.targetScale = 0.75;     // Medium motion: 75%
+            state.motionState = 'MOVING';
+        } else {
+            state.targetScale = 0.5;      // Fast motion: 50%
+            state.motionState = 'FAST';
+        }
+
+        // Smooth transition (avoid jarring changes)
+        state.processScale = state.processScale * 0.9 + state.targetScale * 0.1;
+
+        // Clamp to valid range
+        state.processScale = Math.max(0.25, Math.min(1.0, state.processScale));
+    }
+
+    // =========================================================================
+    // GRAVITY COMPENSATION
+    // =========================================================================
+
+    function rotateVectorByQuat(v, q) {
+        // Rotate vector v by quaternion q: q * v * q^-1
+        const [w, x, y, z] = q;
+        const [vx, vy, vz] = v;
+
+        // Quaternion * vector (treating vector as pure quaternion [0, vx, vy, vz])
+        const qv = [
+            -x*vx - y*vy - z*vz,
+            w*vx + y*vz - z*vy,
+            w*vy + z*vx - x*vz,
+            w*vz + x*vy - y*vx
+        ];
+
+        // Result * conjugate(q)
+        return [
+            qv[0]*(-x) + qv[1]*w + qv[2]*(-z) - qv[3]*(-y),
+            qv[0]*(-y) + qv[2]*w + qv[3]*(-x) - qv[1]*(-z),
+            qv[0]*(-z) + qv[3]*w + qv[1]*(-y) - qv[2]*(-x)
+        ];
+    }
+
+    function updateGravityCompensation() {
+        // Expected gravity in body frame based on current orientation
+        // World gravity is [0, 0, 9.81] pointing down
+        const gravityWorld = [0, 0, 9.81];
+        const gravityBody = rotateVectorByQuat(gravityWorld, state.orientation);
+
+        // Linear acceleration = measured - gravity
+        state.linearAccel = {
+            x: state.accel.x - gravityBody[0],
+            y: state.accel.y - gravityBody[1],
+            z: state.accel.z - gravityBody[2]
+        };
+
+        // Integrate for velocity (with strong damping to prevent drift)
+        const dt = state.frameTime;
+        if (dt > 0 && dt < 0.1) {
+            state.accelVelocity.x = state.accelVelocity.x * 0.95 + state.linearAccel.x * dt;
+            state.accelVelocity.y = state.accelVelocity.y * 0.95 + state.linearAccel.y * dt;
+            state.accelVelocity.z = state.accelVelocity.z * 0.95 + state.linearAccel.z * dt;
+        }
+
+        // When stationary, use accel to refine orientation (gravity points down)
+        const accelMag = Math.sqrt(state.accel.x**2 + state.accel.y**2 + state.accel.z**2);
+        const gyroMag = Math.sqrt(state.gyro.x**2 + state.gyro.y**2 + state.gyro.z**2);
+
+        if (Math.abs(accelMag - 9.81) < 0.5 && gyroMag < 0.1) {
+            // Stationary: good time to calibrate
+            state.motionState = 'STATIONARY';
+        }
+    }
+
+    // =========================================================================
+    // FLOW FIELD DECOMPOSITION
+    // =========================================================================
+
+    function decomposeFlowField(flowField, cx, cy, focalLength) {
+        let sumTx = 0, sumTy = 0;     // Translation
+        let sumCurl = 0;               // Rotation (around optical axis)
+        let sumDiv = 0;                // Expansion/contraction
+        let count = 0;
+        let curlCount = 0;
+
+        for (const f of flowField) {
+            if (f.quality < 0.3 || f.magnitude < 0.3) continue;
+
+            const rx = f.x - cx;  // Relative to center
+            const ry = f.y - cy;
+            const r2 = rx*rx + ry*ry;
+
+            // Translation component (uniform flow)
+            sumTx += f.dx;
+            sumTy += f.dy;
+
+            // Curl (rotation around optical axis)
+            // curl ≈ (rx*vy - ry*vx) / r²
+            if (r2 > 2500) {  // Only use points far from center
+                sumCurl += (rx * f.dy - ry * f.dx) / r2;
+                curlCount++;
+
+                // Divergence (expansion/contraction)
+                // div ≈ (rx*vx + ry*vy) / r²
+                sumDiv += (rx * f.dx + ry * f.dy) / r2;
+            }
+
+            count++;
+        }
+
+        if (count === 0) return state.flowDecomposition;
+
+        const dt = state.frameTime || (1/30);
+
+        // Update decomposition
+        state.flowDecomposition = {
+            // Lateral translation (pixels/frame → m/s)
+            translation: {
+                x: (sumTx / count) / dt * (state.distanceInput || 2) / focalLength,
+                y: (sumTy / count) / dt * (state.distanceInput || 2) / focalLength
+            },
+            // Rotation around Z axis (rad/s)
+            rotation: curlCount > 0 ? (sumCurl / curlCount) / dt : 0,
+            // Expansion rate (1/s) - positive = approaching
+            expansion: curlCount > 0 ? (sumDiv / curlCount) / dt : 0,
+            // Time to collision (seconds)
+            ttc: sumDiv > 0.001 ? Math.abs(1 / (sumDiv / curlCount / dt)) : Infinity
+        };
+
+        return state.flowDecomposition;
+    }
+
+    // =========================================================================
+    // 24-CELL HYSTERESIS FILTERING
+    // =========================================================================
+
+    const latticeFilter = {
+        switchThreshold: 0.7,  // Must be 70% closer to switch (hysteresis)
+        minStableFrames: 3,    // Must be stable for 3 frames to switch
+
+        update(orientation) {
+            const nearest = findNearestVertex(orientation);
+            const distToNearest = quat.dist(orientation, HURWITZ[nearest]);
+            const distToCurrent = quat.dist(orientation, HURWITZ[state.nearestVertex]);
+
+            // Confidence: how close to current vertex (0-1)
+            state.vertexConfidence = Math.max(0, 1 - (distToCurrent / (Math.PI / 3)));
+
+            // Check if we should switch vertices
+            if (nearest !== state.nearestVertex) {
+                // Only switch if significantly closer (hysteresis)
+                if (distToNearest < distToCurrent * this.switchThreshold) {
+                    state.vertexStableFrames++;
+                    if (state.vertexStableFrames >= this.minStableFrames) {
+                        state.lastVertex = state.nearestVertex;
+                        state.nearestVertex = nearest;
+                        state.vertexStableFrames = 0;
+
+                        // Log vertex transition for motion classification
+                        if (state.logging) {
+                            console.log(`Vertex transition: ${state.lastVertex} → ${nearest}`);
+                        }
+                    }
+                } else {
+                    state.vertexStableFrames = 0;
+                }
+            } else {
+                state.vertexStableFrames = 0;
+            }
+
+            // SLERP towards quantized orientation
+            const targetQ = HURWITZ[state.nearestVertex];
+            const blendFactor = 0.15;
+            state.quantizedOrientation = quat.norm([
+                orientation[0] * (1 - blendFactor) + targetQ[0] * blendFactor,
+                orientation[1] * (1 - blendFactor) + targetQ[1] * blendFactor,
+                orientation[2] * (1 - blendFactor) + targetQ[2] * blendFactor,
+                orientation[3] * (1 - blendFactor) + targetQ[3] * blendFactor
+            ]);
+
+            return state.nearestVertex;
+        }
+    };
+
+    // =========================================================================
+    // AUTO CALIBRATION
+    // =========================================================================
+
+    function updateAutoCalibration() {
+        if (!state.sensors || state.motionState === 'STATIONARY') return;
+
+        // Compare accelerometer velocity with optical flow velocity
+        const accelSpeed = Math.sqrt(
+            state.accelVelocity.x**2 +
+            state.accelVelocity.y**2
+        );
+
+        const flowSpeed = state.speed;
+
+        // Only calibrate when both have reasonable values
+        if (accelSpeed > 0.1 && flowSpeed > 0.1) {
+            const ratio = accelSpeed / flowSpeed;
+
+            // Sanity check: ratio should be between 0.1 and 10
+            if (ratio > 0.1 && ratio < 10) {
+                state.calibrationSamples.push(ratio);
+
+                // Use median of last 50 samples
+                if (state.calibrationSamples.length > 50) {
+                    state.calibrationSamples.shift();
+                }
+
+                if (state.calibrationSamples.length >= 20) {
+                    const sorted = [...state.calibrationSamples].sort((a, b) => a - b);
+                    const median = sorted[Math.floor(sorted.length / 2)];
+
+                    // Slowly adjust calibration
+                    state.pixelsPerMeter = state.pixelsPerMeter * 0.99 + (state.pixelsPerMeter * median) * 0.01;
+                }
+            }
+        }
+    }
 
     // =========================================================================
     // IMAGE PROCESSING UTILITIES
@@ -1244,20 +1495,40 @@
 
         const now = Date.now();
         const elapsed = (now - state.logStartTime) / 1000;
+        const euler = quat.toEuler(state.orientation);
+        const decomp = state.flowDecomposition;
 
         state.dataLog.push({
             time: elapsed.toFixed(3),
             speed: state.speed.toFixed(4),
             velocity_x: state.velocity.x.toFixed(4),
             velocity_y: state.velocity.y.toFixed(4),
+            velocity_z: (state.velocity.z || 0).toFixed(4),
             flow_x: state.flowMean.x.toFixed(2),
             flow_y: state.flowMean.y.toFixed(2),
+            // Flow decomposition
+            translation_x: decomp.translation.x.toFixed(4),
+            translation_y: decomp.translation.y.toFixed(4),
+            rotation_rate: (decomp.rotation * 57.2958).toFixed(2), // deg/s
+            expansion: decomp.expansion.toFixed(4),
+            ttc: decomp.ttc < 100 ? decomp.ttc.toFixed(2) : 'inf',
+            // Ego motion
             ego_x: state.egoMotion.x.toFixed(2),
             ego_y: state.egoMotion.y.toFixed(2),
-            roll: quat.toEuler(state.orientation).roll.toFixed(1),
-            pitch: quat.toEuler(state.orientation).pitch.toFixed(1),
-            yaw: quat.toEuler(state.orientation).yaw.toFixed(1),
+            // Orientation
+            roll: euler.roll.toFixed(1),
+            pitch: euler.pitch.toFixed(1),
+            yaw: euler.yaw.toFixed(1),
+            // 24-cell
             vertex: state.nearestVertex,
+            vertex_conf: state.vertexConfidence.toFixed(2),
+            // Linear acceleration (gravity compensated)
+            lin_accel_x: state.linearAccel.x.toFixed(3),
+            lin_accel_y: state.linearAccel.y.toFixed(3),
+            lin_accel_z: state.linearAccel.z.toFixed(3),
+            // Processing
+            motion_state: state.motionState,
+            scale: state.processScale.toFixed(2),
             features: state.trackedFeatures.length,
             fps: state.fps.toFixed(1)
         });
@@ -1738,20 +2009,16 @@
         if (state.sensors && dt > 0 && dt < 0.2) {
             imu.update(state.gyro, state.accel, dt);
             state.orientation = imu.orientation;
+
+            // Gravity compensation for accelerometer
+            updateGravityCompensation();
         }
 
-        // 24-cell quantization - use nearest vertex to smooth noisy orientation
-        state.nearestVertex = findNearestVertex(state.orientation);
+        // 24-cell quantization with hysteresis filtering
+        latticeFilter.update(state.orientation);
 
-        // SLERP towards quantized orientation for stability
-        const targetQ = HURWITZ[state.nearestVertex];
-        const blendFactor = 0.1; // How much to pull towards discrete vertex
-        state.quantizedOrientation = quat.norm([
-            state.orientation[0] * (1 - blendFactor) + targetQ[0] * blendFactor,
-            state.orientation[1] * (1 - blendFactor) + targetQ[1] * blendFactor,
-            state.orientation[2] * (1 - blendFactor) + targetQ[2] * blendFactor,
-            state.orientation[3] * (1 - blendFactor) + targetQ[3] * blendFactor
-        ]);
+        // Adaptive resolution based on motion
+        updateAdaptiveScale();
 
         // Optical flow
         if (state.camera && video.readyState >= 2) {
@@ -1830,6 +2097,21 @@
 
                 state.speedHistory.push(state.speed);
                 state.speedHistory.shift();
+
+                // Flow field decomposition
+                const cx = w / 2, cy = h / 2;
+                decomposeFlowField(state.flowField, cx, cy, state.focalLength);
+
+                // Add forward velocity from expansion (time-to-collision)
+                if (state.flowDecomposition.expansion > 0.01) {
+                    // Approaching: positive forward velocity
+                    state.velocity.z = sceneDistance * state.flowDecomposition.expansion;
+                } else {
+                    state.velocity.z = state.velocity.z * 0.9; // Decay
+                }
+
+                // Auto-calibration using accelerometer
+                updateAutoCalibration();
             }
 
             // Feature tracking (runs every few frames for performance)
@@ -1842,11 +2124,12 @@
             // Draw overlay
             drawOverlay(w, h);
 
-            // Moiré visualization
+            // Moiré visualization - now uses rotation from flow decomposition
             if (state.moireEnabled) {
                 const euler = quat.toEuler(state.quantizedOrientation);
-                // Use flow to animate the moiré - shows motion as fringe shifts
-                drawMoire(w, h, euler.yaw * 0.0174533, state.flowMagnitude * 0.5);
+                // Use both orientation yaw and optical rotation for moiré phase
+                const combinedRotation = euler.yaw * 0.0174533 + state.flowDecomposition.rotation * 0.1;
+                drawMoire(w, h, combinedRotation, state.flowMagnitude * 0.5);
                 moireCanvas.classList.add('active');
             } else {
                 moireCanvas.classList.remove('active');
