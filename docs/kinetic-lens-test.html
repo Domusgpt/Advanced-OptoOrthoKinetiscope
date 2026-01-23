@@ -676,6 +676,15 @@
                 <button class="toggle-btn active" data-value="on">On</button>
             </div>
 
+            <button class="btn" id="logBtn">
+                <span class="btn-icon">⏺</span>
+                <span>Log</span>
+            </button>
+            <button class="btn" id="exportBtn">
+                <span class="btn-icon">📥</span>
+                <span>Export</span>
+            </button>
+
             <div class="control-group">
                 <span class="control-label">Distance</span>
                 <input type="number" class="control-input" id="distanceInput" value="2.0" min="0.1" max="100" step="0.1">
@@ -741,21 +750,41 @@
         flowMean: { x: 0, y: 0 },
         flowMagnitude: 0,
 
+        // Feature tracking
+        features: [],           // Detected corner features
+        trackedFeatures: [],    // Features tracked across frames
+        motionTrails: [],       // Trail history for visualization
+
         // Velocity in m/s (computed from flow + calibration)
         velocity: { x: 0, y: 0 },
         speed: 0,
         rawSpeed: 0, // Unsmoothed for responsiveness display
         speedHistory: new Array(60).fill(0),
 
+        // Ego-motion compensation
+        egoMotion: { x: 0, y: 0, rotation: 0 },
+        objectMotion: { x: 0, y: 0 },
+
         // Frame timing for proper physics
         prevGray: null,
+        prevGrayFull: null,     // Full resolution for feature tracking
         lastTime: 0,
         frameTime: 0, // dt in seconds
         fps: 0,
 
         // Calibration
         focalLength: 800, // pixels (updated from video)
-        pixelsPerMeter: 400 // at reference distance
+        pixelsPerMeter: 400, // at reference distance
+
+        // Processing settings
+        processScale: 0.5,      // Downsample ratio for flow (0.5 = half res)
+        maxFeatures: 100,       // Max features to track
+        trailLength: 20,        // Motion trail history length
+
+        // Data logging
+        dataLog: [],
+        logging: false,
+        logStartTime: 0
     };
 
     // =========================================================================
@@ -872,30 +901,153 @@
     };
 
     // =========================================================================
-    // OPTICAL FLOW - Lucas-Kanade style block matching
+    // IMAGE PROCESSING UTILITIES
+    // =========================================================================
+
+    // Downsample image for faster processing
+    function downsample(imageData, scale) {
+        const sw = imageData.width, sh = imageData.height;
+        const dw = Math.floor(sw * scale), dh = Math.floor(sh * scale);
+        const src = imageData.data;
+        const gray = new Uint8Array(dw * dh);
+
+        const stepX = 1 / scale, stepY = 1 / scale;
+
+        for (let dy = 0; dy < dh; dy++) {
+            const sy = Math.floor(dy * stepY);
+            for (let dx = 0; dx < dw; dx++) {
+                const sx = Math.floor(dx * stepX);
+                const si = (sy * sw + sx) * 4;
+                // Fast grayscale conversion
+                gray[dy * dw + dx] = (src[si] * 77 + src[si + 1] * 150 + src[si + 2] * 29) >> 8;
+            }
+        }
+
+        return { data: gray, width: dw, height: dh };
+    }
+
+    // Compute image gradients for corner detection
+    function computeGradients(gray, w, h) {
+        const Ix = new Float32Array(w * h);
+        const Iy = new Float32Array(w * h);
+
+        for (let y = 1; y < h - 1; y++) {
+            for (let x = 1; x < w - 1; x++) {
+                const i = y * w + x;
+                // Sobel-like gradient
+                Ix[i] = (gray[i + 1] - gray[i - 1]) * 0.5;
+                Iy[i] = (gray[i + w] - gray[i - w]) * 0.5;
+            }
+        }
+
+        return { Ix, Iy };
+    }
+
+    // Harris corner response
+    function harrisResponse(Ix, Iy, w, h, x, y, windowSize = 3) {
+        let Ixx = 0, Iyy = 0, Ixy = 0;
+        const half = Math.floor(windowSize / 2);
+
+        for (let wy = -half; wy <= half; wy++) {
+            for (let wx = -half; wx <= half; wx++) {
+                const i = (y + wy) * w + (x + wx);
+                if (i >= 0 && i < w * h) {
+                    const ix = Ix[i], iy = Iy[i];
+                    Ixx += ix * ix;
+                    Iyy += iy * iy;
+                    Ixy += ix * iy;
+                }
+            }
+        }
+
+        // Harris response: det(M) - k * trace(M)^2
+        const det = Ixx * Iyy - Ixy * Ixy;
+        const trace = Ixx + Iyy;
+        const k = 0.04;
+        return det - k * trace * trace;
+    }
+
+    // Detect corner features
+    function detectFeatures(gray, w, h, maxFeatures = 100) {
+        const { Ix, Iy } = computeGradients(gray, w, h);
+        const responses = [];
+        const threshold = 1000;
+        const margin = 10;
+
+        // Compute Harris response at grid points
+        for (let y = margin; y < h - margin; y += 8) {
+            for (let x = margin; x < w - margin; x += 8) {
+                const r = harrisResponse(Ix, Iy, w, h, x, y, 5);
+                if (r > threshold) {
+                    responses.push({ x, y, response: r });
+                }
+            }
+        }
+
+        // Sort by response and take top N
+        responses.sort((a, b) => b.response - a.response);
+        return responses.slice(0, maxFeatures);
+    }
+
+    // Track a single feature using Lucas-Kanade
+    function trackFeature(prevGray, currGray, w, h, fx, fy, windowSize = 15) {
+        const half = Math.floor(windowSize / 2);
+
+        // Build system of equations: A^T A d = A^T b
+        let Ixx = 0, Iyy = 0, Ixy = 0, Ixt = 0, Iyt = 0;
+
+        for (let wy = -half; wy <= half; wy++) {
+            for (let wx = -half; wx <= half; wx++) {
+                const x = fx + wx, y = fy + wy;
+                if (x < 1 || x >= w - 1 || y < 1 || y >= h - 1) continue;
+
+                const i = y * w + x;
+                const Ix = (currGray[i + 1] - currGray[i - 1]) * 0.5;
+                const Iy = (currGray[i + w] - currGray[i - w]) * 0.5;
+                const It = currGray[i] - prevGray[i];
+
+                Ixx += Ix * Ix;
+                Iyy += Iy * Iy;
+                Ixy += Ix * Iy;
+                Ixt += Ix * It;
+                Iyt += Iy * It;
+            }
+        }
+
+        // Solve 2x2 system
+        const det = Ixx * Iyy - Ixy * Ixy;
+        if (Math.abs(det) < 1e-6) return null;
+
+        const dx = (Iyy * (-Ixt) - Ixy * (-Iyt)) / det;
+        const dy = (Ixx * (-Iyt) - Ixy * (-Ixt)) / det;
+
+        // Reject large displacements
+        if (Math.abs(dx) > 20 || Math.abs(dy) > 20) return null;
+
+        return { x: fx + dx, y: fy + dy, dx, dy };
+    }
+
+    // =========================================================================
+    // OPTICAL FLOW - Lucas-Kanade style block matching (with downsampling)
     // =========================================================================
 
     function computeFlow(imageData) {
-        const w = imageData.width, h = imageData.height;
-        const gray = new Uint8Array(w * h);
-        const d = imageData.data;
-
-        // Convert to grayscale
-        for (let i = 0; i < gray.length; i++) {
-            const j = i * 4;
-            gray[i] = (d[j] * 77 + d[j+1] * 150 + d[j+2] * 29) >> 8;
-        }
+        // Downsample for performance
+        const scale = state.processScale;
+        const { data: gray, width: w, height: h } = downsample(imageData, scale);
 
         if (!state.prevGray || state.prevGray.length !== gray.length) {
             state.prevGray = gray;
+            state.prevGrayWidth = w;
+            state.prevGrayHeight = h;
             return null;
         }
 
-        // Grid parameters - denser for better coverage
-        const gridSize = 24;  // Smaller = denser grid
-        const blockSize = 8;  // Block radius
-        const searchRadius = 12;  // Search range
-        const searchStep = 2;  // Finer step = more accurate
+        // Grid parameters - adjusted for downsampled image
+        const gridSize = Math.floor(24 * scale);
+        const blockSize = Math.floor(8 * scale);
+        const searchRadius = Math.floor(12 * scale);
+        const searchStep = 2;
 
         const flowField = [];
         let totalDx = 0, totalDy = 0, validCount = 0;
@@ -944,13 +1096,14 @@
                 const matchQuality = 1 - Math.min(1, bestSAD / 5000);
                 const magnitude = Math.sqrt(bestDx ** 2 + bestDy ** 2);
 
+                // Scale coordinates back to full resolution for display
                 flowField.push({
-                    x: gx,
-                    y: gy,
-                    dx: bestDx,
-                    dy: bestDy,
+                    x: gx / scale,
+                    y: gy / scale,
+                    dx: bestDx / scale,
+                    dy: bestDy / scale,
                     quality: matchQuality,
-                    magnitude: magnitude
+                    magnitude: magnitude / scale
                 });
 
                 // Only count good matches with actual motion
@@ -965,12 +1118,175 @@
         state.prevGray = gray;
         state.flowField = flowField;
 
+        // Scale flow back to full resolution
+        const flowScale = 1 / scale;
         return validCount > 2 ? {
-            x: totalDx / validCount,
-            y: totalDy / validCount,
+            x: (totalDx / validCount) * flowScale,
+            y: (totalDy / validCount) * flowScale,
             count: validCount,
             total: flowField.length
         } : { x: 0, y: 0, count: 0, total: flowField.length };
+    }
+
+    // =========================================================================
+    // FEATURE TRACKING AND MOTION TRAILS
+    // =========================================================================
+
+    function updateFeatureTracking(imageData) {
+        const w = imageData.width, h = imageData.height;
+        const gray = new Uint8Array(w * h);
+        const d = imageData.data;
+
+        // Convert to grayscale at full resolution for feature tracking
+        for (let i = 0; i < gray.length; i++) {
+            const j = i * 4;
+            gray[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+        }
+
+        // If we don't have enough tracked features, detect new ones
+        if (state.trackedFeatures.length < state.maxFeatures / 2) {
+            const newFeatures = detectFeatures(gray, w, h, state.maxFeatures - state.trackedFeatures.length);
+            for (const f of newFeatures) {
+                // Check if we already have a feature nearby
+                const tooClose = state.trackedFeatures.some(
+                    tf => Math.abs(tf.x - f.x) < 20 && Math.abs(tf.y - f.y) < 20
+                );
+                if (!tooClose) {
+                    state.trackedFeatures.push({
+                        x: f.x,
+                        y: f.y,
+                        id: Math.random().toString(36).substr(2, 9),
+                        age: 0,
+                        trail: [{ x: f.x, y: f.y }]
+                    });
+                }
+            }
+        }
+
+        // Track features if we have a previous frame
+        if (state.prevGrayFull) {
+            const newTracked = [];
+
+            for (const feature of state.trackedFeatures) {
+                const result = trackFeature(state.prevGrayFull, gray, w, h,
+                    Math.round(feature.x), Math.round(feature.y));
+
+                if (result && result.x > 10 && result.x < w - 10 &&
+                    result.y > 10 && result.y < h - 10) {
+                    // Update feature position
+                    feature.x = result.x;
+                    feature.y = result.y;
+                    feature.dx = result.dx;
+                    feature.dy = result.dy;
+                    feature.age++;
+
+                    // Add to trail
+                    feature.trail.push({ x: result.x, y: result.y });
+                    if (feature.trail.length > state.trailLength) {
+                        feature.trail.shift();
+                    }
+
+                    // Keep feature if it's been tracked successfully
+                    if (feature.age < 200) {
+                        newTracked.push(feature);
+                    }
+                }
+            }
+
+            state.trackedFeatures = newTracked;
+
+            // Compute ego-motion from feature consensus
+            if (state.trackedFeatures.length > 5) {
+                const motions = state.trackedFeatures
+                    .filter(f => f.dx !== undefined)
+                    .map(f => ({ dx: f.dx, dy: f.dy }));
+
+                if (motions.length > 0) {
+                    // Median flow for ego-motion (robust to outliers)
+                    motions.sort((a, b) => a.dx - b.dx);
+                    const medianDx = motions[Math.floor(motions.length / 2)].dx;
+                    motions.sort((a, b) => a.dy - b.dy);
+                    const medianDy = motions[Math.floor(motions.length / 2)].dy;
+
+                    state.egoMotion.x = state.egoMotion.x * 0.7 + medianDx * 0.3;
+                    state.egoMotion.y = state.egoMotion.y * 0.7 + medianDy * 0.3;
+
+                    // Detect object motion (features moving differently from ego-motion)
+                    let objDx = 0, objDy = 0, objCount = 0;
+                    for (const f of state.trackedFeatures) {
+                        if (f.dx !== undefined) {
+                            const diffX = f.dx - state.egoMotion.x;
+                            const diffY = f.dy - state.egoMotion.y;
+                            if (Math.sqrt(diffX ** 2 + diffY ** 2) > 2) {
+                                objDx += diffX;
+                                objDy += diffY;
+                                objCount++;
+                            }
+                        }
+                    }
+                    if (objCount > 0) {
+                        state.objectMotion.x = objDx / objCount;
+                        state.objectMotion.y = objDy / objCount;
+                    }
+                }
+            }
+        }
+
+        state.prevGrayFull = gray;
+    }
+
+    // =========================================================================
+    // DATA LOGGING
+    // =========================================================================
+
+    function logDataPoint() {
+        if (!state.logging) return;
+
+        const now = Date.now();
+        const elapsed = (now - state.logStartTime) / 1000;
+
+        state.dataLog.push({
+            time: elapsed.toFixed(3),
+            speed: state.speed.toFixed(4),
+            velocity_x: state.velocity.x.toFixed(4),
+            velocity_y: state.velocity.y.toFixed(4),
+            flow_x: state.flowMean.x.toFixed(2),
+            flow_y: state.flowMean.y.toFixed(2),
+            ego_x: state.egoMotion.x.toFixed(2),
+            ego_y: state.egoMotion.y.toFixed(2),
+            roll: quat.toEuler(state.orientation).roll.toFixed(1),
+            pitch: quat.toEuler(state.orientation).pitch.toFixed(1),
+            yaw: quat.toEuler(state.orientation).yaw.toFixed(1),
+            vertex: state.nearestVertex,
+            features: state.trackedFeatures.length,
+            fps: state.fps.toFixed(1)
+        });
+
+        // Limit log size
+        if (state.dataLog.length > 10000) {
+            state.dataLog.shift();
+        }
+    }
+
+    function exportData() {
+        if (state.dataLog.length === 0) {
+            alert('No data to export. Start logging first.');
+            return;
+        }
+
+        const headers = Object.keys(state.dataLog[0]);
+        const csv = [
+            headers.join(','),
+            ...state.dataLog.map(row => headers.map(h => row[h]).join(','))
+        ].join('\n');
+
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `kinetic-lens-${new Date().toISOString().slice(0, 19).replace(/[:-]/g, '')}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
     }
 
     // =========================================================================
@@ -1137,11 +1453,75 @@
         ctx.arc(cx, cy, 5, 0, Math.PI * 2);
         ctx.stroke();
 
+        // Draw motion trails for tracked features
+        for (const feature of state.trackedFeatures) {
+            if (feature.trail.length < 2) continue;
+
+            // Trail gradient - newer = brighter
+            const trail = feature.trail;
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            for (let i = 1; i < trail.length; i++) {
+                const alpha = (i / trail.length) * 0.8;
+                const isMovingDifferently = feature.dx !== undefined &&
+                    Math.sqrt((feature.dx - state.egoMotion.x) ** 2 + (feature.dy - state.egoMotion.y) ** 2) > 2;
+
+                // Cyan for ego-motion, magenta for independent object motion
+                ctx.strokeStyle = isMovingDifferently
+                    ? `rgba(255, 0, 255, ${alpha})`
+                    : `rgba(0, 200, 255, ${alpha})`;
+
+                ctx.beginPath();
+                ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+                ctx.lineTo(trail[i].x, trail[i].y);
+                ctx.stroke();
+            }
+
+            // Feature point marker
+            const last = trail[trail.length - 1];
+            ctx.fillStyle = '#00ffff';
+            ctx.beginPath();
+            ctx.arc(last.x, last.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Ego-motion indicator (camera motion)
+        if (Math.abs(state.egoMotion.x) > 0.5 || Math.abs(state.egoMotion.y) > 0.5) {
+            const egoScale = 10;
+            ctx.strokeStyle = 'rgba(0, 200, 255, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + state.egoMotion.x * egoScale, cy + state.egoMotion.y * egoScale);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Label
+            ctx.fillStyle = 'rgba(0, 200, 255, 0.8)';
+            ctx.font = '10px monospace';
+            ctx.fillText('EGO', cx + state.egoMotion.x * egoScale + 5, cy + state.egoMotion.y * egoScale);
+        }
+
         // FPS display
         ctx.fillStyle = 'rgba(0, 255, 136, 0.7)';
         ctx.font = '12px monospace';
         ctx.fillText(`${state.fps.toFixed(0)} FPS`, 10, 20);
         ctx.fillText(`Flow: ${state.flowField.filter(f => f.magnitude > 0.5).length}/${state.flowField.length}`, 10, 35);
+        ctx.fillText(`Features: ${state.trackedFeatures.length}`, 10, 50);
+
+        // Logging indicator
+        if (state.logging) {
+            ctx.fillStyle = '#ff4444';
+            ctx.beginPath();
+            ctx.arc(width - 20, 20, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '10px monospace';
+            ctx.fillText('REC', width - 45, 24);
+        }
     }
 
     function drawCompass() {
@@ -1452,6 +1832,13 @@
                 state.speedHistory.shift();
             }
 
+            // Feature tracking (runs every few frames for performance)
+            if (state.frameCount === undefined) state.frameCount = 0;
+            state.frameCount++;
+            if (state.frameCount % 3 === 0) {  // Every 3rd frame
+                updateFeatureTracking(imgData);
+            }
+
             // Draw overlay
             drawOverlay(w, h);
 
@@ -1464,6 +1851,9 @@
             } else {
                 moireCanvas.classList.remove('active');
             }
+
+            // Data logging
+            logDataPoint();
         }
 
         updateUI();
@@ -1598,6 +1988,7 @@
     $('resetBtn').addEventListener('click', () => {
         imu.reset();
         state.prevGray = null;
+        state.prevGrayFull = null;
         state.flowField = [];
         state.flowMean = { x: 0, y: 0 };
         state.flowMagnitude = 0;
@@ -1610,6 +2001,13 @@
         state.nearestVertex = 0;
         moirePhaseAccum = 0;
 
+        // Reset feature tracking
+        state.features = [];
+        state.trackedFeatures = [];
+        state.motionTrails = [];
+        state.egoMotion = { x: 0, y: 0, rotation: 0 };
+        state.objectMotion = { x: 0, y: 0 };
+
         // Reset status indicators
         $('flowStatus').classList.remove('active', 'pending');
     });
@@ -1621,6 +2019,22 @@
             state.moireEnabled = e.target.dataset.value === 'on';
         }
     });
+
+    $('logBtn').addEventListener('click', () => {
+        state.logging = !state.logging;
+        const btn = $('logBtn');
+        if (state.logging) {
+            state.logStartTime = Date.now();
+            state.dataLog = [];
+            btn.classList.add('active');
+            btn.querySelector('span:last-child').textContent = 'Stop';
+        } else {
+            btn.classList.remove('active');
+            btn.querySelector('span:last-child').textContent = 'Log';
+        }
+    });
+
+    $('exportBtn').addEventListener('click', exportData);
 
     // Auto-enable sensors on desktop
     if (!/iPhone|iPad|Android/i.test(navigator.userAgent)) {
