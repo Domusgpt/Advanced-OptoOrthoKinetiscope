@@ -645,6 +645,15 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="panel" style="font-size: 11px; color: var(--text-dim); line-height: 1.6;">
+                    <div class="panel-title">How It Works</div>
+                    <p><strong style="color: var(--accent);">Flow vectors</strong> track pixel motion between frames.</p>
+                    <p><strong style="color: var(--accent);">Speed</strong> = flow × (distance / focal length) / dt</p>
+                    <p><strong style="color: var(--accent);">24-Cell</strong> quantizes orientation to reduce noise.</p>
+                    <p><strong style="color: var(--accent);">Moiré</strong> fringes shift with motion for visual feedback.</p>
+                    <p style="margin-top: 8px; font-style: italic;">Set scene distance for accurate velocity.</p>
+                </div>
             </aside>
         </main>
 
@@ -724,15 +733,29 @@
         accel: { x: 0, y: 0, z: 0 },
 
         orientation: [1, 0, 0, 0],
+        quantizedOrientation: [1, 0, 0, 0], // Smoothed via 24-cell
         nearestVertex: 0,
 
-        flow: { x: 0, y: 0 },
+        // Flow field - grid of vectors
+        flowField: [],
+        flowMean: { x: 0, y: 0 },
+        flowMagnitude: 0,
+
+        // Velocity in m/s (computed from flow + calibration)
         velocity: { x: 0, y: 0 },
         speed: 0,
+        rawSpeed: 0, // Unsmoothed for responsiveness display
         speedHistory: new Array(60).fill(0),
 
+        // Frame timing for proper physics
         prevGray: null,
-        lastTime: 0
+        lastTime: 0,
+        frameTime: 0, // dt in seconds
+        fps: 0,
+
+        // Calibration
+        focalLength: 800, // pixels (updated from video)
+        pixelsPerMeter: 400 // at reference distance
     };
 
     // =========================================================================
@@ -849,7 +872,7 @@
     };
 
     // =========================================================================
-    // OPTICAL FLOW
+    // OPTICAL FLOW - Lucas-Kanade style block matching
     // =========================================================================
 
     function computeFlow(imageData) {
@@ -857,28 +880,39 @@
         const gray = new Uint8Array(w * h);
         const d = imageData.data;
 
+        // Convert to grayscale
         for (let i = 0; i < gray.length; i++) {
             const j = i * 4;
             gray[i] = (d[j] * 77 + d[j+1] * 150 + d[j+2] * 29) >> 8;
         }
 
-        if (!state.prevGray) {
+        if (!state.prevGray || state.prevGray.length !== gray.length) {
             state.prevGray = gray;
             return null;
         }
 
-        let totalDx = 0, totalDy = 0, count = 0;
-        const gs = 32, sr = 16;
+        // Grid parameters - denser for better coverage
+        const gridSize = 24;  // Smaller = denser grid
+        const blockSize = 8;  // Block radius
+        const searchRadius = 12;  // Search range
+        const searchStep = 2;  // Finer step = more accurate
 
-        for (let gy = sr + 8; gy < h - sr - 8; gy += gs) {
-            for (let gx = sr + 8; gx < w - sr - 8; gx += gs) {
+        const flowField = [];
+        let totalDx = 0, totalDy = 0, validCount = 0;
+
+        const margin = searchRadius + blockSize;
+
+        for (let gy = margin; gy < h - margin; gy += gridSize) {
+            for (let gx = margin; gx < w - margin; gx += gridSize) {
                 let bestDx = 0, bestDy = 0, bestSAD = Infinity;
 
-                for (let dy = -sr; dy <= sr; dy += 4) {
-                    for (let dx = -sr; dx <= sr; dx += 4) {
+                // Block matching with hierarchical search
+                // First coarse pass
+                for (let dy = -searchRadius; dy <= searchRadius; dy += 4) {
+                    for (let dx = -searchRadius; dx <= searchRadius; dx += 4) {
                         let sad = 0;
-                        for (let by = -4; by < 4; by += 2) {
-                            for (let bx = -4; bx < 4; bx += 2) {
+                        for (let by = -blockSize; by < blockSize; by += 2) {
+                            for (let bx = -blockSize; bx < blockSize; bx += 2) {
                                 const i1 = (gy + by) * w + (gx + bx);
                                 const i2 = (gy + by + dy) * w + (gx + bx + dx);
                                 sad += Math.abs(gray[i1] - state.prevGray[i2]);
@@ -888,40 +922,117 @@
                     }
                 }
 
-                if (bestSAD < 3000) {
+                // Refine around best match
+                const refineDx = bestDx, refineDy = bestDy;
+                for (let dy = refineDy - 3; dy <= refineDy + 3; dy += 1) {
+                    for (let dx = refineDx - 3; dx <= refineDx + 3; dx += 1) {
+                        let sad = 0;
+                        for (let by = -blockSize; by < blockSize; by += 2) {
+                            for (let bx = -blockSize; bx < blockSize; bx += 2) {
+                                const i1 = (gy + by) * w + (gx + bx);
+                                const i2 = (gy + by + dy) * w + (gx + bx + dx);
+                                if (i2 >= 0 && i2 < gray.length) {
+                                    sad += Math.abs(gray[i1] - state.prevGray[i2]);
+                                }
+                            }
+                        }
+                        if (sad < bestSAD) { bestSAD = sad; bestDx = dx; bestDy = dy; }
+                    }
+                }
+
+                // Quality threshold - lower SAD = better match
+                const matchQuality = 1 - Math.min(1, bestSAD / 5000);
+                const magnitude = Math.sqrt(bestDx ** 2 + bestDy ** 2);
+
+                flowField.push({
+                    x: gx,
+                    y: gy,
+                    dx: bestDx,
+                    dy: bestDy,
+                    quality: matchQuality,
+                    magnitude: magnitude
+                });
+
+                // Only count good matches with actual motion
+                if (matchQuality > 0.4 && magnitude > 0.5) {
                     totalDx += bestDx;
                     totalDy += bestDy;
-                    count++;
+                    validCount++;
                 }
             }
         }
 
         state.prevGray = gray;
-        return count > 0 ? { x: totalDx / count, y: totalDy / count } : { x: 0, y: 0 };
+        state.flowField = flowField;
+
+        return validCount > 2 ? {
+            x: totalDx / validCount,
+            y: totalDy / validCount,
+            count: validCount,
+            total: flowField.length
+        } : { x: 0, y: 0, count: 0, total: flowField.length };
     }
 
     // =========================================================================
-    // MOIRÉ GENERATOR
+    // MOIRÉ GENERATOR - Creates interference pattern for motion amplification
     // =========================================================================
 
-    function drawMoire(width, height, rotation, phase) {
-        moireCanvas.width = width;
-        moireCanvas.height = height;
+    let moirePhaseAccum = 0;
+
+    function drawMoire(width, height, rotation, flowMag) {
+        // Only resize if needed
+        if (moireCanvas.width !== width || moireCanvas.height !== height) {
+            moireCanvas.width = width;
+            moireCanvas.height = height;
+        }
+
+        // Accumulate phase based on motion - this creates the "beating" effect
+        moirePhaseAccum += flowMag * 0.05;
 
         const img = moireCtx.createImageData(width, height);
         const d = img.data;
-        const freq = 0.15;
-        const cos = Math.cos(rotation), sin = Math.sin(rotation);
+
+        // Two overlapping gratings at slightly different frequencies
+        // Their interference creates moiré fringes that amplify small motions
+        const freq1 = 0.12;
+        const freq2 = 0.125; // Slightly different = low-frequency beats
+
+        const cos1 = Math.cos(rotation);
+        const sin1 = Math.sin(rotation);
+        const cos2 = Math.cos(rotation + 0.02); // Slight angle difference
+        const sin2 = Math.sin(rotation + 0.02);
+
+        const cx = width / 2;
+        const cy = height / 2;
 
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
-                const xr = (x - width/2) * cos - (y - height/2) * sin;
-                const v = Math.sin(xr * freq + phase) > 0 ? 255 : 0;
+                const dx = x - cx;
+                const dy = y - cy;
+
+                // Grating 1 - reference (fixed)
+                const xr1 = dx * cos1 - dy * sin1;
+                const g1 = Math.sin(xr1 * freq1);
+
+                // Grating 2 - shifted by motion
+                const xr2 = dx * cos2 - dy * sin2;
+                const g2 = Math.sin(xr2 * freq2 + moirePhaseAccum);
+
+                // Interference = product of gratings
+                // This creates low-frequency moiré fringes
+                const interference = (g1 * g2 + 1) * 0.5;
+
+                // Convert to binary for sharper fringes
+                const v = interference > 0.5 ? 200 : 55;
+
                 const i = (y * width + x) * 4;
-                d[i] = d[i+1] = d[i+2] = v;
-                d[i+3] = 255;
+                d[i] = v;
+                d[i + 1] = v;
+                d[i + 2] = v;
+                d[i + 3] = 255;
             }
         }
+
         moireCtx.putImageData(img, 0, 0);
     }
 
@@ -933,14 +1044,46 @@
         ctx.clearRect(0, 0, width, height);
         const cx = width / 2, cy = height / 2;
 
-        // Flow vector
-        const scale = 8;
-        const fx = state.flow.x * scale, fy = state.flow.y * scale;
-        const mag = Math.sqrt(fx**2 + fy**2);
+        // Draw flow field vectors
+        const flowScale = 3;
+        for (const f of state.flowField) {
+            const mag = f.magnitude;
+            if (mag < 0.5) continue; // Skip static points
 
-        if (mag > 2) {
-            ctx.strokeStyle = `rgba(0, 255, 136, ${Math.min(1, mag / 50)})`;
-            ctx.lineWidth = 3;
+            // Color based on quality and magnitude
+            const alpha = Math.min(0.9, f.quality * 0.7 + 0.2);
+            const hue = Math.max(0, 120 - mag * 8); // Green to red based on speed
+            ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${alpha})`;
+            ctx.lineWidth = Math.min(3, 1 + mag * 0.2);
+
+            const ex = f.x + f.dx * flowScale;
+            const ey = f.y + f.dy * flowScale;
+
+            ctx.beginPath();
+            ctx.moveTo(f.x, f.y);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+
+            // Small arrowhead
+            if (mag > 2) {
+                const angle = Math.atan2(f.dy, f.dx);
+                ctx.beginPath();
+                ctx.moveTo(ex, ey);
+                ctx.lineTo(ex - 5 * Math.cos(angle - 0.5), ey - 5 * Math.sin(angle - 0.5));
+                ctx.moveTo(ex, ey);
+                ctx.lineTo(ex - 5 * Math.cos(angle + 0.5), ey - 5 * Math.sin(angle + 0.5));
+                ctx.stroke();
+            }
+        }
+
+        // Draw average flow vector (large central arrow)
+        const fx = state.flowMean.x * 6;
+        const fy = state.flowMean.y * 6;
+        const mag = Math.sqrt(fx ** 2 + fy ** 2);
+
+        if (mag > 3) {
+            ctx.strokeStyle = '#00ff88';
+            ctx.lineWidth = 4;
             ctx.lineCap = 'round';
 
             ctx.beginPath();
@@ -948,25 +1091,57 @@
             ctx.lineTo(cx + fx, cy + fy);
             ctx.stroke();
 
-            // Arrow
+            // Arrow head
             const angle = Math.atan2(fy, fx);
             ctx.beginPath();
             ctx.moveTo(cx + fx, cy + fy);
-            ctx.lineTo(cx + fx - 12 * Math.cos(angle - 0.4), cy + fy - 12 * Math.sin(angle - 0.4));
+            ctx.lineTo(cx + fx - 15 * Math.cos(angle - 0.4), cy + fy - 15 * Math.sin(angle - 0.4));
             ctx.moveTo(cx + fx, cy + fy);
-            ctx.lineTo(cx + fx - 12 * Math.cos(angle + 0.4), cy + fy - 12 * Math.sin(angle + 0.4));
+            ctx.lineTo(cx + fx - 15 * Math.cos(angle + 0.4), cy + fy - 15 * Math.sin(angle + 0.4));
             ctx.stroke();
         }
 
-        // Crosshair
-        ctx.strokeStyle = 'rgba(0, 255, 136, 0.3)';
+        // Reference grid
+        ctx.strokeStyle = 'rgba(0, 255, 136, 0.15)';
         ctx.lineWidth = 1;
-        ctx.setLineDash([5, 5]);
-        ctx.beginPath();
-        ctx.moveTo(cx - 40, cy); ctx.lineTo(cx + 40, cy);
-        ctx.moveTo(cx, cy - 40); ctx.lineTo(cx, cy + 40);
-        ctx.stroke();
+        ctx.setLineDash([2, 8]);
+
+        // Horizontal lines
+        for (let y = height * 0.25; y < height; y += height * 0.25) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+        }
+        // Vertical lines
+        for (let x = width * 0.25; x < width; x += width * 0.25) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+        }
         ctx.setLineDash([]);
+
+        // Center crosshair
+        ctx.strokeStyle = 'rgba(0, 255, 136, 0.5)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx - 30, cy); ctx.lineTo(cx - 10, cy);
+        ctx.moveTo(cx + 10, cy); ctx.lineTo(cx + 30, cy);
+        ctx.moveTo(cx, cy - 30); ctx.lineTo(cx, cy - 10);
+        ctx.moveTo(cx, cy + 10); ctx.lineTo(cx, cy + 30);
+        ctx.stroke();
+
+        // Center circle
+        ctx.beginPath();
+        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // FPS display
+        ctx.fillStyle = 'rgba(0, 255, 136, 0.7)';
+        ctx.font = '12px monospace';
+        ctx.fillText(`${state.fps.toFixed(0)} FPS`, 10, 20);
+        ctx.fillText(`Flow: ${state.flowField.filter(f => f.magnitude > 0.5).length}/${state.flowField.length}`, 10, 35);
     }
 
     function drawCompass() {
@@ -975,57 +1150,132 @@
 
         compassCtx.clearRect(0, 0, w, h);
 
-        // Ring
+        // Outer ring
         compassCtx.strokeStyle = 'rgba(0, 255, 136, 0.3)';
         compassCtx.lineWidth = 2;
         compassCtx.beginPath();
         compassCtx.arc(cx, cy, r, 0, Math.PI * 2);
         compassCtx.stroke();
 
-        // Direction
-        const dir = Math.atan2(state.velocity.y, state.velocity.x);
-        const mag = Math.sqrt(state.velocity.x**2 + state.velocity.y**2);
-
-        if (mag > 0.01) {
-            compassCtx.strokeStyle = '#00ff88';
-            compassCtx.lineWidth = 3;
+        // Tick marks
+        for (let i = 0; i < 8; i++) {
+            const angle = (i * Math.PI) / 4;
+            const inner = i % 2 === 0 ? r - 8 : r - 5;
             compassCtx.beginPath();
-            compassCtx.moveTo(cx, cy);
-            compassCtx.lineTo(cx + r * 0.8 * Math.cos(dir), cy + r * 0.8 * Math.sin(dir));
+            compassCtx.moveTo(cx + inner * Math.cos(angle), cy + inner * Math.sin(angle));
+            compassCtx.lineTo(cx + r * Math.cos(angle), cy + r * Math.sin(angle));
             compassCtx.stroke();
         }
 
-        // N marker
-        compassCtx.fillStyle = '#666';
-        compassCtx.font = '10px sans-serif';
+        // Flow direction - points where camera is moving
+        const flowMag = state.flowMagnitude;
+        const flowDir = Math.atan2(state.flowMean.y, state.flowMean.x);
+
+        if (flowMag > 0.5) {
+            const arrowLen = Math.min(r * 0.8, r * 0.3 + flowMag * 2);
+            const alpha = Math.min(1, flowMag / 5);
+
+            // Arrow shaft
+            compassCtx.strokeStyle = `rgba(0, 255, 136, ${alpha})`;
+            compassCtx.lineWidth = 3;
+            compassCtx.lineCap = 'round';
+            compassCtx.beginPath();
+            compassCtx.moveTo(cx, cy);
+            compassCtx.lineTo(cx + arrowLen * Math.cos(flowDir), cy + arrowLen * Math.sin(flowDir));
+            compassCtx.stroke();
+
+            // Arrow head
+            const tipX = cx + arrowLen * Math.cos(flowDir);
+            const tipY = cy + arrowLen * Math.sin(flowDir);
+            compassCtx.beginPath();
+            compassCtx.moveTo(tipX, tipY);
+            compassCtx.lineTo(tipX - 8 * Math.cos(flowDir - 0.5), tipY - 8 * Math.sin(flowDir - 0.5));
+            compassCtx.moveTo(tipX, tipY);
+            compassCtx.lineTo(tipX - 8 * Math.cos(flowDir + 0.5), tipY - 8 * Math.sin(flowDir + 0.5));
+            compassCtx.stroke();
+        }
+
+        // Center dot
+        compassCtx.fillStyle = 'rgba(0, 255, 136, 0.5)';
+        compassCtx.beginPath();
+        compassCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+        compassCtx.fill();
+
+        // Speed label
+        compassCtx.fillStyle = '#00ff88';
+        compassCtx.font = 'bold 10px sans-serif';
         compassCtx.textAlign = 'center';
-        compassCtx.fillText('N', cx, cy - r - 5);
+        compassCtx.fillText(state.speed.toFixed(1), cx, cy + r + 12);
     }
 
     function drawGraph() {
         const w = graph.width, h = graph.height;
+
+        // Background
         graphCtx.fillStyle = '#1a1a24';
         graphCtx.fillRect(0, 0, w, h);
 
-        const max = Math.max(1, ...state.speedHistory);
+        // Grid lines
+        graphCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        graphCtx.lineWidth = 1;
+        for (let y = h * 0.25; y < h; y += h * 0.25) {
+            graphCtx.beginPath();
+            graphCtx.moveTo(0, y);
+            graphCtx.lineTo(w, y);
+            graphCtx.stroke();
+        }
+
+        const max = Math.max(0.5, ...state.speedHistory);
         const step = w / state.speedHistory.length;
 
+        // Gradient fill under curve
+        const gradient = graphCtx.createLinearGradient(0, 0, 0, h);
+        gradient.addColorStop(0, 'rgba(0, 255, 136, 0.3)');
+        gradient.addColorStop(1, 'rgba(0, 255, 136, 0.0)');
+
+        graphCtx.fillStyle = gradient;
+        graphCtx.beginPath();
+        graphCtx.moveTo(0, h);
+
+        for (let i = 0; i < state.speedHistory.length; i++) {
+            const x = i * step;
+            const y = h - (state.speedHistory[i] / max) * (h - 15) - 5;
+            graphCtx.lineTo(x, y);
+        }
+        graphCtx.lineTo(w, h);
+        graphCtx.closePath();
+        graphCtx.fill();
+
+        // Line
         graphCtx.strokeStyle = '#00ff88';
         graphCtx.lineWidth = 2;
+        graphCtx.lineJoin = 'round';
         graphCtx.beginPath();
 
         for (let i = 0; i < state.speedHistory.length; i++) {
             const x = i * step;
-            const y = h - (state.speedHistory[i] / max) * (h - 10) - 5;
+            const y = h - (state.speedHistory[i] / max) * (h - 15) - 5;
             if (i === 0) graphCtx.moveTo(x, y);
             else graphCtx.lineTo(x, y);
         }
         graphCtx.stroke();
 
-        // Current value
+        // Current point
+        const lastY = h - (state.speed / max) * (h - 15) - 5;
         graphCtx.fillStyle = '#00ff88';
-        graphCtx.font = '10px sans-serif';
+        graphCtx.beginPath();
+        graphCtx.arc(w - step, lastY, 4, 0, Math.PI * 2);
+        graphCtx.fill();
+
+        // Labels
+        graphCtx.font = '10px monospace';
+        graphCtx.fillStyle = '#00ff88';
         graphCtx.fillText(`${state.speed.toFixed(2)} m/s`, 5, 12);
+
+        graphCtx.fillStyle = '#666';
+        graphCtx.textAlign = 'right';
+        graphCtx.fillText(`max: ${max.toFixed(1)}`, w - 5, 12);
+        graphCtx.textAlign = 'left';
     }
 
     // =========================================================================
@@ -1033,40 +1283,56 @@
     // =========================================================================
 
     function updateUI() {
-        // HUD
-        $('speedDisplay').textContent = state.speed.toFixed(1);
-        $('speedKmh').textContent = (state.speed * 3.6).toFixed(1);
+        // HUD - show both raw and smoothed
+        const displaySpeed = state.speed;
+        $('speedDisplay').textContent = displaySpeed.toFixed(1);
+        $('speedKmh').textContent = (displaySpeed * 3.6).toFixed(1);
 
-        const euler = quat.toEuler(state.orientation);
+        const euler = quat.toEuler(state.quantizedOrientation);
         $('rollDisplay').textContent = euler.roll.toFixed(0) + '°';
         $('pitchDisplay').textContent = euler.pitch.toFixed(0) + '°';
         $('yawDisplay').textContent = euler.yaw.toFixed(0) + '°';
         $('vertexLabel').textContent = VERTEX_LABELS[state.nearestVertex];
 
-        // Sidebar
-        $('metricSpeed').innerHTML = state.speed.toFixed(2) + '<span class="metric-unit">m/s</span>';
-        $('metricDirection').innerHTML = (Math.atan2(state.velocity.y, state.velocity.x) * 57.3).toFixed(0) + '<span class="metric-unit">°</span>';
-        $('metricFlowX').innerHTML = state.flow.x.toFixed(1) + '<span class="metric-unit">px</span>';
-        $('metricFlowY').innerHTML = state.flow.y.toFixed(1) + '<span class="metric-unit">px</span>';
+        // Sidebar - Motion
+        $('metricSpeed').innerHTML = displaySpeed.toFixed(2) + '<span class="metric-unit">m/s</span>';
 
-        const omega = Math.sqrt(state.gyro.x**2 + state.gyro.y**2 + state.gyro.z**2) * 57.3;
+        const dir = Math.atan2(state.velocity.y, state.velocity.x) * 57.2958;
+        $('metricDirection').innerHTML = dir.toFixed(0) + '<span class="metric-unit">°</span>';
+
+        // Show flow in pixels/second (more meaningful than raw)
+        const flowPPS_X = state.frameTime > 0 ? (state.flowMean.x / state.frameTime) : 0;
+        const flowPPS_Y = state.frameTime > 0 ? (state.flowMean.y / state.frameTime) : 0;
+        $('metricFlowX').innerHTML = flowPPS_X.toFixed(0) + '<span class="metric-unit">px/s</span>';
+        $('metricFlowY').innerHTML = flowPPS_Y.toFixed(0) + '<span class="metric-unit">px/s</span>';
+
+        // Rotation - angular velocity
+        const omega = Math.sqrt(state.gyro.x ** 2 + state.gyro.y ** 2 + state.gyro.z ** 2) * 57.2958;
         $('metricOmega').innerHTML = omega.toFixed(1) + '<span class="metric-unit">°/s</span>';
 
-        const stability = Math.max(0, 100 - omega * 5);
+        // Stability based on both rotation rate and flow consistency
+        const flowStd = state.flowField.length > 0
+            ? Math.sqrt(state.flowField.reduce((s, f) => s + (f.magnitude - state.flowMagnitude) ** 2, 0) / state.flowField.length)
+            : 0;
+        const stability = Math.max(0, Math.min(100, 100 - omega * 3 - flowStd * 2));
         $('metricStability').innerHTML = stability.toFixed(0) + '<span class="metric-unit">%</span>';
         const stabBar = $('stabilityBar');
         stabBar.style.width = stability + '%';
         stabBar.className = 'progress-fill' + (stability < 30 ? ' error' : stability < 60 ? ' warning' : '');
 
+        // 24-cell
         $('vertexName').textContent = VERTEX_LABELS[state.nearestVertex];
         $('vertexIndex').textContent = state.nearestVertex;
-
-        // 24-cell
         document.querySelectorAll('.cell').forEach((c, i) => c.classList.toggle('active', i === state.nearestVertex));
 
-        // Confidence
-        const conf = (state.camera ? 40 : 0) + (state.sensors ? 40 : 0) + (Math.sqrt(state.flow.x**2 + state.flow.y**2) > 1 ? 20 : 0);
-        $('metricConfidence').textContent = conf + '%';
+        // Confidence based on data quality
+        const activeFlows = state.flowField.filter(f => f.magnitude > 0.5 && f.quality > 0.4).length;
+        const flowConf = Math.min(40, (activeFlows / Math.max(1, state.flowField.length)) * 60);
+        const sensorConf = state.sensors ? 30 : 0;
+        const cameraConf = state.camera ? 30 : 0;
+        const conf = Math.min(100, flowConf + sensorConf + cameraConf);
+
+        $('metricConfidence').textContent = conf.toFixed(0) + '%';
         const confBar = $('confidenceBar');
         confBar.style.width = conf + '%';
         confBar.className = 'progress-fill' + (conf < 30 ? ' error' : conf < 60 ? ' warning' : '');
@@ -1082,50 +1348,118 @@
     function loop(timestamp) {
         if (!state.running) return;
 
+        // Frame timing
         const dt = state.lastTime ? (timestamp - state.lastTime) / 1000 : 0;
         state.lastTime = timestamp;
+        state.frameTime = dt;
+        state.fps = dt > 0 ? (state.fps * 0.9 + (1 / dt) * 0.1) : state.fps;
 
-        // IMU
-        if (state.sensors && dt > 0) {
+        // IMU integration
+        if (state.sensors && dt > 0 && dt < 0.2) {
             imu.update(state.gyro, state.accel, dt);
             state.orientation = imu.orientation;
         }
 
-        // 24-cell
+        // 24-cell quantization - use nearest vertex to smooth noisy orientation
         state.nearestVertex = findNearestVertex(state.orientation);
+
+        // SLERP towards quantized orientation for stability
+        const targetQ = HURWITZ[state.nearestVertex];
+        const blendFactor = 0.1; // How much to pull towards discrete vertex
+        state.quantizedOrientation = quat.norm([
+            state.orientation[0] * (1 - blendFactor) + targetQ[0] * blendFactor,
+            state.orientation[1] * (1 - blendFactor) + targetQ[1] * blendFactor,
+            state.orientation[2] * (1 - blendFactor) + targetQ[2] * blendFactor,
+            state.orientation[3] * (1 - blendFactor) + targetQ[3] * blendFactor
+        ]);
 
         // Optical flow
         if (state.camera && video.readyState >= 2) {
             const w = video.videoWidth, h = video.videoHeight;
-            overlay.width = w; overlay.height = h;
 
+            // Update focal length estimate based on video size
+            state.focalLength = Math.max(w, h) * 0.8; // Approximate for typical phone camera
+
+            overlay.width = w;
+            overlay.height = h;
+
+            // Capture frame
             ctx.drawImage(video, 0, 0, w, h);
             const imgData = ctx.getImageData(0, 0, w, h);
+
+            // Compute flow
             const flow = computeFlow(imgData);
 
-            if (flow) {
-                state.flow.x = state.flow.x * 0.7 + flow.x * 0.3;
-                state.flow.y = state.flow.y * 0.7 + flow.y * 0.3;
-                $('flowStatus').classList.add('active');
+            if (flow && dt > 0) {
+                // Less aggressive smoothing for responsiveness
+                const smooth = 0.5;
+                state.flowMean.x = state.flowMean.x * smooth + flow.x * (1 - smooth);
+                state.flowMean.y = state.flowMean.y * smooth + flow.y * (1 - smooth);
+                state.flowMagnitude = Math.sqrt(state.flowMean.x ** 2 + state.flowMean.y ** 2);
+
+                // Update flow status based on quality
+                const flowStatus = $('flowStatus');
+                if (flow.count > 5) {
+                    flowStatus.classList.add('active');
+                    flowStatus.classList.remove('pending');
+                } else if (flow.count > 0) {
+                    flowStatus.classList.add('pending');
+                    flowStatus.classList.remove('active');
+                } else {
+                    flowStatus.classList.remove('active', 'pending');
+                }
+
+                // ======= PHYSICS CALCULATION =======
+                // Convert optical flow (pixels/frame) to velocity (m/s)
+                //
+                // Formula: velocity = (flow_pixels / dt) * (distance / focal_length)
+                //
+                // - flow_pixels: displacement in image plane (pixels)
+                // - dt: time between frames (seconds)
+                // - distance: scene distance (meters)
+                // - focal_length: camera focal length (pixels)
+                //
+                // This gives: v = (pixels/second) * (meters/pixel at distance d)
+
+                const sceneDistance = parseFloat($('distanceInput').value) || 2.0;
+
+                // Raw velocity from flow (pixels/second -> m/s)
+                const pixelsPerSecondX = state.flowMean.x / dt;
+                const pixelsPerSecondY = state.flowMean.y / dt;
+
+                // Convert to world velocity using pinhole camera model
+                // At distance d, 1 pixel corresponds to d/f meters
+                const metersPerPixel = sceneDistance / state.focalLength;
+
+                const rawVelX = pixelsPerSecondX * metersPerPixel;
+                const rawVelY = pixelsPerSecondY * metersPerPixel;
+
+                // Smooth the velocity
+                state.velocity.x = state.velocity.x * 0.7 + rawVelX * 0.3;
+                state.velocity.y = state.velocity.y * 0.7 + rawVelY * 0.3;
+
+                // Speed
+                state.rawSpeed = Math.sqrt(rawVelX ** 2 + rawVelY ** 2);
+                state.speed = Math.sqrt(state.velocity.x ** 2 + state.velocity.y ** 2);
+
+                // Cap unrealistic values (sensor noise)
+                if (state.speed > 100) {
+                    state.speed = 0;
+                    state.rawSpeed = 0;
+                }
+
+                state.speedHistory.push(state.speed);
+                state.speedHistory.shift();
             }
 
-            // Velocity
-            const dist = parseFloat($('distanceInput').value) || 2;
-            const focal = w;
-            state.velocity.x = state.velocity.x * 0.9 + (state.flow.x * dist / focal) * 0.1;
-            state.velocity.y = state.velocity.y * 0.9 + (state.flow.y * dist / focal) * 0.1;
-            state.speed = Math.sqrt(state.velocity.x**2 + state.velocity.y**2);
-
-            state.speedHistory.push(state.speed);
-            state.speedHistory.shift();
-
-            // Draw
+            // Draw overlay
             drawOverlay(w, h);
 
-            // Moiré
+            // Moiré visualization
             if (state.moireEnabled) {
-                const euler = quat.toEuler(state.orientation);
-                drawMoire(w, h, euler.yaw * 0.0174533, state.flow.x * 0.1);
+                const euler = quat.toEuler(state.quantizedOrientation);
+                // Use flow to animate the moiré - shows motion as fringe shifts
+                drawMoire(w, h, euler.yaw * 0.0174533, state.flowMagnitude * 0.5);
                 moireCanvas.classList.add('active');
             } else {
                 moireCanvas.classList.remove('active');
@@ -1264,10 +1598,20 @@
     $('resetBtn').addEventListener('click', () => {
         imu.reset();
         state.prevGray = null;
-        state.flow = { x: 0, y: 0 };
+        state.flowField = [];
+        state.flowMean = { x: 0, y: 0 };
+        state.flowMagnitude = 0;
         state.velocity = { x: 0, y: 0 };
         state.speed = 0;
+        state.rawSpeed = 0;
         state.speedHistory.fill(0);
+        state.orientation = [1, 0, 0, 0];
+        state.quantizedOrientation = [1, 0, 0, 0];
+        state.nearestVertex = 0;
+        moirePhaseAccum = 0;
+
+        // Reset status indicators
+        $('flowStatus').classList.remove('active', 'pending');
     });
 
     $('moireToggle').addEventListener('click', e => {
