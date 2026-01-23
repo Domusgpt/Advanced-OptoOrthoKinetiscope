@@ -607,23 +607,23 @@
                 </div>
 
                 <div class="panel">
-                    <div class="panel-title">Flow Decomposition</div>
+                    <div class="panel-title">Scene Measurement</div>
                     <div class="metric-grid">
                         <div class="metric-card">
-                            <div class="metric-label">Rotation</div>
-                            <div class="metric-value small" id="metricFlowRot">0.0<span class="metric-unit">°/s</span></div>
+                            <div class="metric-label">Camera Speed</div>
+                            <div class="metric-value small" id="metricEgoSpeed">0.0<span class="metric-unit">m/s</span></div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Expansion</div>
-                            <div class="metric-value small" id="metricExpansion">0.0<span class="metric-unit">/s</span></div>
+                            <div class="metric-label">Objects Found</div>
+                            <div class="metric-value small accent" id="metricObjectCount">0</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">TTC</div>
-                            <div class="metric-value small accent" id="metricTTC">--<span class="metric-unit">s</span></div>
+                            <div class="metric-label">Object Speed</div>
+                            <div class="metric-value small" id="metricObjectSpeed">0.0<span class="metric-unit">m/s</span></div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Motion Type</div>
-                            <div class="metric-value small" id="metricMotionType">--</div>
+                            <div class="metric-label">Calib Quality</div>
+                            <div class="metric-value small" id="metricCalibQuality">0<span class="metric-unit">%</span></div>
                         </div>
                     </div>
                 </div>
@@ -784,12 +784,12 @@
         flowMean: { x: 0, y: 0 },
         flowMagnitude: 0,
 
-        // Flow decomposition
+        // Flow decomposition (for understanding ego-motion)
         flowDecomposition: {
             translation: { x: 0, y: 0 },  // Lateral motion
             rotation: 0,                   // Rotation around optical axis
-            expansion: 0,                  // Forward/backward motion
-            ttc: Infinity                  // Time to collision
+            expansion: 0,                  // Forward/backward motion (used to estimate distance)
+            ttc: Infinity                  // Inverse of expansion rate (useful for scale estimation)
         },
 
         // Feature tracking
@@ -806,6 +806,14 @@
         // Ego-motion compensation
         egoMotion: { x: 0, y: 0, rotation: 0 },
         objectMotion: { x: 0, y: 0 },
+
+        // Scene measurement results (objects detected via ego-motion subtraction)
+        sceneMetrics: {
+            egoSpeed: 0,        // Camera movement speed (m/s)
+            objectCount: 0,     // Number of detected moving objects
+            maxObjectSpeed: 0,  // Fastest object speed (m/s)
+            calibQuality: 0     // Calibration quality (0-100%)
+        },
 
         // Frame timing for proper physics
         prevGray: null,
@@ -1098,13 +1106,14 @@
     };
 
     // =========================================================================
-    // AUDIO FEEDBACK - TTC Warning
+    // AUDIO FEEDBACK - Calibration & Object Detection
     // =========================================================================
 
     const audioFeedback = {
         audioCtx: null,
         lastBeepTime: 0,
-        enabled: true,
+        enabled: false, // Disabled by default, enable via settings
+        lastCalibMilestone: 0,
 
         init() {
             // Create audio context on first user interaction
@@ -1142,16 +1151,21 @@
             } catch (e) {}
         },
 
-        ttcWarning(ttc) {
-            if (ttc < 1) {
-                // Critical: fast beeps
-                this.beep(880, 0.1, 0.5);
-            } else if (ttc < 2) {
-                // Urgent: medium beeps
-                this.beep(660, 0.15, 0.4);
-            } else if (ttc < 3) {
-                // Warning: slow beeps
-                this.beep(440, 0.2, 0.3);
+        // Notify when calibration reaches a new milestone
+        calibrationMilestone(quality) {
+            const milestone = Math.floor(quality / 25) * 25; // 0, 25, 50, 75, 100
+            if (milestone > this.lastCalibMilestone && milestone > 0) {
+                this.lastCalibMilestone = milestone;
+                // Rising tone for calibration progress
+                this.beep(440 + milestone * 2, 0.15, 0.3);
+            }
+        },
+
+        // Notify when a fast-moving object is detected
+        objectDetected(speed) {
+            if (speed > 2.0) {
+                // High-speed object: distinctive sound
+                this.beep(660, 0.1, 0.4);
             }
         }
     };
@@ -2339,31 +2353,88 @@
         ctx.fillStyle = 'rgba(0, 255, 136, 0.5)';
         ctx.fillText(`Scale: ${(state.processScale * 100).toFixed(0)}%`, 10, 80);
 
-        // TTC Warning overlay
-        const ttc = state.flowDecomposition.ttc;
-        if (ttc < 5 && ttc > 0) {
-            // Draw warning border
-            const urgency = Math.max(0, 1 - ttc / 5);
-            const borderWidth = 5 + urgency * 15;
+        // Calibration quality indicator
+        const calibQuality = Math.min(100, state.calibrationSamples.length * 5);
+        ctx.fillStyle = calibQuality > 50 ? '#00ff88' : calibQuality > 20 ? '#ffaa00' : '#ff4444';
+        ctx.fillText(`Calib: ${calibQuality}%`, 10, 95);
 
-            ctx.strokeStyle = ttc < 2 ? `rgba(255, 0, 0, ${0.5 + urgency * 0.5})` :
-                              ttc < 3 ? `rgba(255, 170, 0, ${0.3 + urgency * 0.4})` :
-                                        `rgba(255, 255, 0, ${0.2 + urgency * 0.3})`;
-            ctx.lineWidth = borderWidth;
+        // === OBJECT MOTION DETECTION ===
+        // Highlight regions where motion differs from ego-motion (actual objects moving in scene)
+        const egoMag = Math.sqrt(state.egoMotion.x**2 + state.egoMotion.y**2);
+        const sceneDistance = parseFloat($('distanceInput').value) || 2.0;
+        const dt = state.frameTime || (1/30);
 
-            ctx.strokeRect(borderWidth / 2, borderWidth / 2,
-                          width - borderWidth, height - borderWidth);
+        let objectCount = 0;
+        let maxObjSpeed = 0;
+        const calibQualityPct = Math.min(100, state.calibrationSamples.length * 5);
 
-            // TTC text overlay
-            ctx.fillStyle = ttc < 2 ? '#ff0000' : ttc < 3 ? '#ffaa00' : '#ffff00';
-            ctx.font = 'bold 24px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(`TTC: ${ttc.toFixed(1)}s`, cx, 40);
-            ctx.textAlign = 'left';
+        for (const f of state.flowField) {
+            if (f.quality < 0.4) continue;
 
-            // Trigger audio warning
-            audioFeedback.ttcWarning(ttc);
+            // Calculate how different this flow is from ego-motion (camera movement)
+            const diffX = f.dx - state.egoMotion.x;
+            const diffY = f.dy - state.egoMotion.y;
+            const diffMag = Math.sqrt(diffX**2 + diffY**2);
+
+            // If significantly different from ego-motion, it's a moving object in the scene
+            if (diffMag > 2 && (egoMag < 0.5 || diffMag > egoMag * 0.5)) {
+                objectCount++;
+
+                // Calculate calibrated object speed (m/s) using sensor-derived calibration
+                const objSpeedPxPerSec = diffMag / dt;
+                const objSpeedMPerSec = objSpeedPxPerSec * sceneDistance / state.focalLength;
+                maxObjSpeed = Math.max(maxObjSpeed, objSpeedMPerSec);
+
+                // Draw object motion indicator - larger circle for faster objects
+                const radius = Math.min(20, 5 + objSpeedMPerSec * 3);
+                const hue = Math.max(0, 120 - objSpeedMPerSec * 20); // Green→Red by speed
+
+                ctx.fillStyle = `hsla(${hue}, 100%, 50%, 0.5)`;
+                ctx.beginPath();
+                ctx.arc(f.x, f.y, radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Object velocity vector (direction of movement in scene)
+                ctx.strokeStyle = `hsla(${hue}, 100%, 70%, 0.8)`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(f.x, f.y);
+                ctx.lineTo(f.x + diffX * 4, f.y + diffY * 4);
+                ctx.stroke();
+            }
         }
+
+        // Store object detection results for UI
+        const egoSpeed = egoMag / dt * sceneDistance / state.focalLength;
+        state.sceneMetrics = {
+            egoSpeed: egoSpeed,
+            objectCount: objectCount,
+            maxObjectSpeed: maxObjSpeed,
+            calibQuality: calibQualityPct
+        };
+
+        // === CALIBRATED MEASUREMENTS PANEL ===
+        // Shows what we can measure using sensor-calibrated optical flow
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(width - 160, height - 100, 155, 95);
+
+        ctx.fillStyle = '#00ff88';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(`Camera: ${egoSpeed.toFixed(2)} m/s`, width - 10, height - 82);
+
+        // Detected objects in scene (motion that differs from ego)
+        ctx.fillStyle = objectCount > 0 ? '#ffaa00' : '#666';
+        ctx.fillText(`Objects: ${objectCount}`, width - 10, height - 68);
+        ctx.fillText(`Max spd: ${maxObjSpeed.toFixed(2)} m/s`, width - 10, height - 54);
+
+        // Calibration reference info
+        ctx.fillStyle = '#888';
+        ctx.fillText(`Distance: ${sceneDistance.toFixed(1)} m`, width - 10, height - 36);
+        ctx.fillText(`Focal: ${state.focalLength.toFixed(0)} px`, width - 10, height - 22);
+        ctx.fillText(`Calib: ${calibQuality}%`, width - 10, height - 8);
+
+        ctx.textAlign = 'left';
 
         // Logging indicator
         if (state.logging) {
@@ -2570,23 +2641,28 @@
         confBar.style.width = conf + '%';
         confBar.className = 'progress-fill' + (conf < 30 ? ' error' : conf < 60 ? ' warning' : '');
 
-        // Flow decomposition metrics
-        const decomp = state.flowDecomposition;
-        $('metricFlowRot').innerHTML = (decomp.rotation * 57.2958).toFixed(1) + '<span class="metric-unit">°/s</span>';
-        $('metricExpansion').innerHTML = decomp.expansion.toFixed(2) + '<span class="metric-unit">/s</span>';
+        // Scene Measurement metrics
+        const metrics = state.sceneMetrics || { egoSpeed: 0, objectCount: 0, maxObjectSpeed: 0, calibQuality: 0 };
 
-        // TTC with color coding
-        const ttcEl = $('metricTTC');
-        if (decomp.ttc < 100) {
-            ttcEl.innerHTML = decomp.ttc.toFixed(1) + '<span class="metric-unit">s</span>';
-            ttcEl.style.color = decomp.ttc < 2 ? 'var(--error)' : decomp.ttc < 5 ? 'var(--warning)' : 'var(--accent)';
-        } else {
-            ttcEl.innerHTML = '--<span class="metric-unit">s</span>';
-            ttcEl.style.color = 'var(--text-dim)';
-        }
+        // Camera ego-speed (how fast the phone/camera is moving)
+        $('metricEgoSpeed').innerHTML = metrics.egoSpeed.toFixed(2) + '<span class="metric-unit">m/s</span>';
 
-        // Motion type from 24-cell transitions
-        $('metricMotionType').textContent = state.motionType || state.motionState || '--';
+        // Number of detected moving objects in scene
+        const objCountEl = $('metricObjectCount');
+        objCountEl.textContent = metrics.objectCount;
+        objCountEl.style.color = metrics.objectCount > 0 ? 'var(--warning)' : 'var(--text-dim)';
+
+        // Maximum object speed detected
+        const objSpeedEl = $('metricObjectSpeed');
+        objSpeedEl.innerHTML = metrics.maxObjectSpeed.toFixed(2) + '<span class="metric-unit">m/s</span>';
+        objSpeedEl.style.color = metrics.maxObjectSpeed > 1 ? 'var(--error)' :
+                                  metrics.maxObjectSpeed > 0.3 ? 'var(--warning)' : 'var(--accent)';
+
+        // Calibration quality percentage
+        const calibEl = $('metricCalibQuality');
+        calibEl.innerHTML = metrics.calibQuality.toFixed(0) + '<span class="metric-unit">%</span>';
+        calibEl.style.color = metrics.calibQuality > 50 ? 'var(--accent)' :
+                              metrics.calibQuality > 20 ? 'var(--warning)' : 'var(--error)';
 
         // Update Kalman status
         const kalmanActive = kalman.P_orient < 0.5; // Converged
