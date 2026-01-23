@@ -188,15 +188,31 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: rgba(255, 0, 0, 0.1);
-            border: 1px solid #f00;
+            background: rgba(20, 0, 0, 0.95);
+            border: 2px solid #f00;
             color: #f00;
-            padding: 20px;
-            max-width: 400px;
+            padding: 30px;
+            max-width: 90%;
+            width: 400px;
             text-align: center;
             display: none;
             z-index: 1000;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.5;
         }
+
+        .video-placeholder {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #666;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .video-placeholder.error { color: #f00; }
 
         .bar-container {
             height: 8px;
@@ -226,6 +242,10 @@
         <div class="video-container">
             <video id="video" autoplay playsinline muted></video>
             <canvas id="overlay"></canvas>
+            <div class="video-placeholder" id="videoPlaceholder">
+                Click "Start" to enable camera<br>
+                <small style="color:#444">(Requires HTTPS or localhost)</small>
+            </div>
         </div>
 
         <div class="hud">
@@ -662,19 +682,74 @@
     // Start camera
     async function startCamera() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
-            });
-            video.srcObject = stream;
-            await video.play();
+            // Check if getUserMedia is available
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showError('Camera API not available. Make sure you are using HTTPS.');
+                return;
+            }
 
+            document.getElementById('cameraStatus').classList.add('pending');
+
+            // Try environment camera first, fall back to any camera
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
+                });
+            } catch (e) {
+                console.log('Environment camera failed, trying any camera:', e);
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 640 }, height: { ideal: 480 } }
+                });
+            }
+
+            video.srcObject = stream;
+
+            // Wait for video to be ready
+            await new Promise((resolve, reject) => {
+                video.onloadedmetadata = () => {
+                    video.play()
+                        .then(resolve)
+                        .catch(reject);
+                };
+                video.onerror = reject;
+                setTimeout(() => reject(new Error('Video load timeout')), 10000);
+            });
+
+            // Set canvas size after video is playing
             overlay.width = video.videoWidth || 640;
             overlay.height = video.videoHeight || 480;
 
             state.cameraActive = true;
+            document.getElementById('cameraStatus').classList.remove('pending');
             document.getElementById('cameraStatus').classList.add('active');
+
+            console.log('Camera started:', video.videoWidth, 'x', video.videoHeight);
+
+            // Hide placeholder
+            document.getElementById('videoPlaceholder').style.display = 'none';
+
         } catch (err) {
-            showError('Camera error: ' + err.message);
+            document.getElementById('cameraStatus').classList.remove('pending');
+            console.error('Camera error:', err);
+
+            let msg = 'Camera error: ' + err.message;
+            if (err.name === 'NotAllowedError') {
+                msg = 'Camera permission denied. Please allow camera access.';
+            } else if (err.name === 'NotFoundError') {
+                msg = 'No camera found on this device.';
+            } else if (err.name === 'NotReadableError') {
+                msg = 'Camera is in use by another application.';
+            } else if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+                msg = 'Camera requires HTTPS. Current: ' + location.protocol;
+            }
+
+            showError(msg);
+
+            // Also show in placeholder
+            const placeholder = document.getElementById('videoPlaceholder');
+            placeholder.innerHTML = msg;
+            placeholder.classList.add('error');
         }
     }
 
