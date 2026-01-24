@@ -2659,10 +2659,10 @@
                                   metrics.maxObjectSpeed > 0.3 ? 'var(--warning)' : 'var(--accent)';
 
         // Calibration quality percentage
-        const calibEl = $('metricCalibQuality');
-        calibEl.innerHTML = metrics.calibQuality.toFixed(0) + '<span class="metric-unit">%</span>';
-        calibEl.style.color = metrics.calibQuality > 50 ? 'var(--accent)' :
-                              metrics.calibQuality > 20 ? 'var(--warning)' : 'var(--error)';
+        const calibQualityEl = $('metricCalibQuality');
+        calibQualityEl.innerHTML = metrics.calibQuality.toFixed(0) + '<span class="metric-unit">%</span>';
+        calibQualityEl.style.color = metrics.calibQuality > 50 ? 'var(--accent)' :
+                                     metrics.calibQuality > 20 ? 'var(--warning)' : 'var(--error)';
 
         // Update Kalman status
         const kalmanActive = kalman.P_orient < 0.5; // Converged
