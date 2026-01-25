@@ -706,6 +706,11 @@
                 <button class="toggle-btn active" data-value="on">On</button>
             </div>
 
+            <div class="toggle" id="overlayToggle">
+                <button class="toggle-btn active" data-value="full">Full</button>
+                <button class="toggle-btn" data-value="min">Minimal</button>
+            </div>
+
             <button class="btn" id="logBtn">
                 <span class="btn-icon">⏺</span>
                 <span>Log</span>
@@ -842,7 +847,73 @@
         // Data logging
         dataLog: [],
         logging: false,
-        logStartTime: 0
+        logStartTime: 0,
+
+        // Performance/debug options
+        minimalOverlay: false,  // Reduce overlay drawing for performance
+        showPerfStats: true     // Show timing breakdown
+    };
+
+    // =========================================================================
+    // PERFORMANCE PROFILER
+    // =========================================================================
+
+    const perf = {
+        // Rolling averages (ms)
+        flowTime: 0,
+        drawTime: 0,
+        uiTime: 0,
+        totalTime: 0,
+
+        // Current frame timings
+        _flowStart: 0,
+        _drawStart: 0,
+        _uiStart: 0,
+        _frameStart: 0,
+
+        // Smoothing factor
+        alpha: 0.1,
+
+        startFrame() {
+            this._frameStart = performance.now();
+        },
+
+        startFlow() {
+            this._flowStart = performance.now();
+        },
+
+        endFlow() {
+            const t = performance.now() - this._flowStart;
+            this.flowTime = this.flowTime * (1 - this.alpha) + t * this.alpha;
+        },
+
+        startDraw() {
+            this._drawStart = performance.now();
+        },
+
+        endDraw() {
+            const t = performance.now() - this._drawStart;
+            this.drawTime = this.drawTime * (1 - this.alpha) + t * this.alpha;
+        },
+
+        startUI() {
+            this._uiStart = performance.now();
+        },
+
+        endUI() {
+            const t = performance.now() - this._uiStart;
+            this.uiTime = this.uiTime * (1 - this.alpha) + t * this.alpha;
+        },
+
+        endFrame() {
+            const t = performance.now() - this._frameStart;
+            this.totalTime = this.totalTime * (1 - this.alpha) + t * this.alpha;
+        },
+
+        // Get timing breakdown string
+        getStats() {
+            return `Flow: ${this.flowTime.toFixed(1)}ms | Draw: ${this.drawTime.toFixed(1)}ms | UI: ${this.uiTime.toFixed(1)}ms | Total: ${this.totalTime.toFixed(1)}ms`;
+        }
     };
 
     // =========================================================================
@@ -2192,6 +2263,40 @@
         ctx.clearRect(0, 0, width, height);
         const cx = width / 2, cy = height / 2;
 
+        // Performance stats (always shown at top for debugging)
+        if (state.showPerfStats) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillRect(0, 0, width, 18);
+            ctx.fillStyle = '#00ffff';
+            ctx.font = '11px monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText(perf.getStats() + ` | ${state.minimalOverlay ? 'MINIMAL' : 'FULL'}`, 5, 13);
+        }
+
+        // In minimal mode, only draw essential info (skip flow field vectors)
+        if (state.minimalOverlay) {
+            // Just draw the main flow arrow and basic metrics
+            const fx = state.flowMean.x * 6;
+            const fy = state.flowMean.y * 6;
+            const mag = Math.sqrt(fx ** 2 + fy ** 2);
+
+            if (mag > 3) {
+                ctx.strokeStyle = '#00ff88';
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(cx + fx, cy + fy);
+                ctx.stroke();
+            }
+
+            // Minimal FPS display
+            ctx.fillStyle = 'rgba(0, 255, 136, 0.7)';
+            ctx.font = '12px monospace';
+            ctx.fillText(`${state.fps.toFixed(0)} FPS`, 10, 35);
+            return; // Skip detailed rendering
+        }
+
         // Draw flow field vectors
         const flowScale = 3;
         for (const f of state.flowField) {
@@ -2701,6 +2806,8 @@
     function loop(timestamp) {
         if (!state.running) return;
 
+        perf.startFrame();
+
         // Frame timing
         const dt = state.lastTime ? (timestamp - state.lastTime) / 1000 : 0;
         state.lastTime = timestamp;
@@ -2750,8 +2857,10 @@
             ctx.drawImage(video, 0, 0, w, h);
             const imgData = ctx.getImageData(0, 0, w, h);
 
-            // Compute flow
+            // Compute flow (timed)
+            perf.startFlow();
             const flow = computeFlow(imgData);
+            perf.endFlow();
 
             if (flow && dt > 0) {
                 // Less aggressive smoothing for responsiveness
@@ -2842,8 +2951,10 @@
                 updateFeatureTracking(imgData);
             }
 
-            // Draw overlay
+            // Draw overlay (timed)
+            perf.startDraw();
             drawOverlay(w, h);
+            perf.endDraw();
 
             // Moiré visualization - now uses rotation from flow decomposition
             if (state.moireEnabled) {
@@ -2860,7 +2971,12 @@
             logDataPoint();
         }
 
+        // Update UI (timed)
+        perf.startUI();
         updateUI();
+        perf.endUI();
+
+        perf.endFrame();
         requestAnimationFrame(loop);
     }
 
@@ -3061,6 +3177,30 @@
             $('moireToggle').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
             e.target.classList.add('active');
             state.moireEnabled = e.target.dataset.value === 'on';
+        }
+    });
+
+    $('overlayToggle').addEventListener('click', e => {
+        if (e.target.classList.contains('toggle-btn')) {
+            $('overlayToggle').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+            e.target.classList.add('active');
+            state.minimalOverlay = e.target.dataset.value === 'min';
+        }
+    });
+
+    // Keyboard shortcuts for debugging
+    document.addEventListener('keydown', e => {
+        if (e.key === 'm' || e.key === 'M') {
+            // Toggle minimal overlay
+            state.minimalOverlay = !state.minimalOverlay;
+            $('overlayToggle').querySelectorAll('.toggle-btn').forEach(b => {
+                b.classList.toggle('active',
+                    (state.minimalOverlay && b.dataset.value === 'min') ||
+                    (!state.minimalOverlay && b.dataset.value === 'full'));
+            });
+        } else if (e.key === 'p' || e.key === 'P') {
+            // Toggle perf stats
+            state.showPerfStats = !state.showPerfStats;
         }
     });
 
