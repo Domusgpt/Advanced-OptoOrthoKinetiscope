@@ -2464,56 +2464,97 @@
         ctx.fillText(`Calib: ${calibQuality}%`, 10, 95);
 
         // === OBJECT MOTION DETECTION ===
-        // Highlight regions where motion differs from ego-motion (actual objects moving in scene)
+        // Cluster flow points that differ from ego-motion into discrete objects
         const egoMag = Math.sqrt(state.egoMotion.x**2 + state.egoMotion.y**2);
         const sceneDistance = parseFloat($('distanceInput').value) || 2.0;
         const dt = state.frameTime || (1/30);
-
-        let objectCount = 0;
-        let maxObjSpeed = 0;
         const calibQualityPct = Math.min(100, state.calibrationSamples.length * 5);
 
-        for (const f of state.flowField) {
-            if (f.quality < 0.4) continue;
+        // Stricter thresholds to reduce noise
+        const MIN_DIFF_MAG = 4;           // Minimum difference from ego-motion (was 2)
+        const MIN_QUALITY = 0.5;          // Minimum flow quality (was 0.4)
+        const CLUSTER_RADIUS = 60;        // Pixels - merge nearby detections
+        const MAX_OBJECTS = 5;            // Limit objects to track
 
-            // Calculate how different this flow is from ego-motion (camera movement)
+        // First pass: collect candidate points
+        const candidates = [];
+        for (const f of state.flowField) {
+            if (f.quality < MIN_QUALITY) continue;
+
             const diffX = f.dx - state.egoMotion.x;
             const diffY = f.dy - state.egoMotion.y;
             const diffMag = Math.sqrt(diffX**2 + diffY**2);
 
-            // If significantly different from ego-motion, it's a moving object in the scene
-            if (diffMag > 2 && (egoMag < 0.5 || diffMag > egoMag * 0.5)) {
-                objectCount++;
-
-                // Calculate calibrated object speed (m/s) using sensor-derived calibration
-                const objSpeedPxPerSec = diffMag / dt;
-                const objSpeedMPerSec = objSpeedPxPerSec * sceneDistance / state.focalLength;
-                maxObjSpeed = Math.max(maxObjSpeed, objSpeedMPerSec);
-
-                // Draw object motion indicator - larger circle for faster objects
-                const radius = Math.min(20, 5 + objSpeedMPerSec * 3);
-                const hue = Math.max(0, 120 - objSpeedMPerSec * 20); // Green→Red by speed
-
-                ctx.fillStyle = `hsla(${hue}, 100%, 50%, 0.5)`;
-                ctx.beginPath();
-                ctx.arc(f.x, f.y, radius, 0, Math.PI * 2);
-                ctx.fill();
-
-                // Object velocity vector (direction of movement in scene)
-                ctx.strokeStyle = `hsla(${hue}, 100%, 70%, 0.8)`;
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(f.x, f.y);
-                ctx.lineTo(f.x + diffX * 4, f.y + diffY * 4);
-                ctx.stroke();
+            // Must be significantly different from ego-motion
+            if (diffMag > MIN_DIFF_MAG && (egoMag < 1 || diffMag > egoMag * 0.7)) {
+                candidates.push({ x: f.x, y: f.y, diffX, diffY, diffMag });
             }
+        }
+
+        // Second pass: cluster nearby candidates into objects
+        const objects = [];
+        for (const c of candidates) {
+            // Check if this belongs to an existing cluster
+            let merged = false;
+            for (const obj of objects) {
+                const dist = Math.sqrt((c.x - obj.x)**2 + (c.y - obj.y)**2);
+                if (dist < CLUSTER_RADIUS) {
+                    // Merge into existing object (weighted average)
+                    const n = obj.count;
+                    obj.x = (obj.x * n + c.x) / (n + 1);
+                    obj.y = (obj.y * n + c.y) / (n + 1);
+                    obj.diffX = (obj.diffX * n + c.diffX) / (n + 1);
+                    obj.diffY = (obj.diffY * n + c.diffY) / (n + 1);
+                    obj.diffMag = Math.max(obj.diffMag, c.diffMag);
+                    obj.count++;
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged && objects.length < MAX_OBJECTS) {
+                objects.push({ ...c, count: 1 });
+            }
+        }
+
+        // Filter: only keep clusters with multiple points (reduces noise)
+        const confirmedObjects = objects.filter(o => o.count >= 3);
+
+        // Calculate max speed and draw confirmed objects
+        let maxObjSpeed = 0;
+        for (const obj of confirmedObjects) {
+            const objSpeedPxPerSec = obj.diffMag / dt;
+            const objSpeedMPerSec = objSpeedPxPerSec * sceneDistance / state.focalLength;
+            maxObjSpeed = Math.max(maxObjSpeed, objSpeedMPerSec);
+
+            // Draw object marker - size based on cluster size and speed
+            const radius = Math.min(30, 10 + obj.count * 2 + objSpeedMPerSec * 2);
+            const hue = Math.max(0, 120 - objSpeedMPerSec * 15);
+
+            ctx.fillStyle = `hsla(${hue}, 100%, 50%, 0.4)`;
+            ctx.beginPath();
+            ctx.arc(obj.x, obj.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Object velocity vector
+            ctx.strokeStyle = `hsla(${hue}, 100%, 70%, 0.9)`;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(obj.x, obj.y);
+            ctx.lineTo(obj.x + obj.diffX * 5, obj.y + obj.diffY * 5);
+            ctx.stroke();
+
+            // Speed label
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${objSpeedMPerSec.toFixed(1)}m/s`, obj.x, obj.y - radius - 5);
         }
 
         // Store object detection results for UI
         const egoSpeed = egoMag / dt * sceneDistance / state.focalLength;
         state.sceneMetrics = {
             egoSpeed: egoSpeed,
-            objectCount: objectCount,
+            objectCount: confirmedObjects.length,
             maxObjectSpeed: maxObjSpeed,
             calibQuality: calibQualityPct
         };
