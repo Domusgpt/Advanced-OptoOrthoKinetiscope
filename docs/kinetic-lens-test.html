@@ -1,0 +1,3270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>KineticLens - Precision Motion Measurement</title>
+    <style>
+        :root {
+            --bg-dark: #0a0a0f;
+            --bg-panel: #12121a;
+            --bg-card: #1a1a24;
+            --border: #2a2a3a;
+            --text: #e0e0e0;
+            --text-dim: #666;
+            --accent: #00ff88;
+            --accent-dim: #00aa55;
+            --warning: #ffaa00;
+            --error: #ff4444;
+            --info: #00aaff;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+
+        .app {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            height: 100vh;
+            height: 100dvh;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent), var(--info));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+
+        .logo-text {
+            font-weight: 600;
+            font-size: 16px;
+            color: var(--accent);
+        }
+
+        .status-bar {
+            display: flex;
+            gap: 12px;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--error);
+            transition: background 0.3s;
+        }
+
+        .status-dot.active { background: var(--accent); }
+        .status-dot.pending { background: var(--warning); animation: pulse 1s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Main content */
+        .main {
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            gap: 0;
+            overflow: hidden;
+        }
+
+        @media (max-width: 900px) {
+            .main {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr auto;
+            }
+            .sidebar {
+                max-height: 40vh;
+                overflow-y: auto;
+            }
+        }
+
+        /* Video Area */
+        .video-area {
+            position: relative;
+            background: #000;
+            overflow: hidden;
+        }
+
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        #moireOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            mix-blend-mode: difference;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        #moireOverlay.active { opacity: 0.3; }
+
+        .video-placeholder {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: var(--text-dim);
+        }
+
+        .video-placeholder h2 {
+            font-size: 18px;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+
+        .video-placeholder p {
+            font-size: 13px;
+            margin-bottom: 16px;
+        }
+
+        .video-placeholder.error { color: var(--error); }
+        .video-placeholder.error h2 { color: var(--error); }
+
+        /* HUD Overlays */
+        .hud-speed {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 24px;
+            min-width: 140px;
+        }
+
+        .hud-speed .value {
+            font-size: 48px;
+            font-weight: 200;
+            color: var(--accent);
+            line-height: 1;
+        }
+
+        .hud-speed .unit {
+            font-size: 14px;
+            color: var(--text-dim);
+            margin-left: 4px;
+        }
+
+        .hud-speed .secondary {
+            font-size: 18px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        .hud-compass {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 100px;
+            height: 100px;
+        }
+
+        .hud-orientation {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 12px;
+        }
+
+        .hud-orientation .row {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            margin: 4px 0;
+        }
+
+        .hud-orientation .label { color: var(--text-dim); }
+        .hud-orientation .val { color: var(--accent); font-weight: 500; }
+
+        .hud-vertex {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--accent);
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: var(--bg-panel);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .panel {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .panel-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .metric-card {
+            background: var(--bg-card);
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .metric-card.full { grid-column: 1 / -1; }
+
+        .metric-label {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 300;
+            color: var(--text);
+        }
+
+        .metric-value.accent { color: var(--accent); }
+        .metric-value.small { font-size: 16px; }
+
+        .metric-unit {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-left: 2px;
+        }
+
+        /* 24-Cell Display */
+        .cell-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 4px;
+        }
+
+        .cell {
+            aspect-ratio: 1;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            color: var(--text-dim);
+            transition: all 0.15s;
+        }
+
+        .cell.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--bg-dark);
+            font-weight: 600;
+            transform: scale(1.1);
+            box-shadow: 0 0 12px var(--accent);
+        }
+
+        /* Graph */
+        .graph-container {
+            height: 80px;
+            background: var(--bg-card);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        /* Progress bars */
+        .progress-bar {
+            height: 6px;
+            background: var(--bg-card);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            transition: width 0.2s;
+            border-radius: 3px;
+        }
+
+        .progress-fill.warning { background: var(--warning); }
+        .progress-fill.error { background: var(--error); }
+
+        /* Controls */
+        .controls {
+            background: var(--bg-panel);
+            border-top: 1px solid var(--border);
+            padding: 12px 16px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .btn {
+            background: var(--bg-card);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            background: var(--border);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn.primary {
+            background: var(--accent);
+            color: var(--bg-dark);
+            border-color: var(--accent);
+        }
+
+        .btn.primary:hover {
+            background: var(--accent-dim);
+        }
+
+        .btn.active {
+            background: var(--accent);
+            color: var(--bg-dark);
+        }
+
+        .btn-icon {
+            font-size: 16px;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .control-label {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .control-input {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 13px;
+            width: 80px;
+        }
+
+        .control-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .toggle {
+            display: flex;
+            gap: 2px;
+            background: var(--bg-card);
+            border-radius: 6px;
+            padding: 2px;
+        }
+
+        .toggle-btn {
+            padding: 6px 12px;
+            border: none;
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .toggle-btn.active {
+            background: var(--accent);
+            color: var(--bg-dark);
+        }
+
+        /* Error modal */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal.show { display: flex; }
+
+        .modal-content {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+            max-width: 400px;
+            text-align: center;
+        }
+
+        .modal-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .modal-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .modal-text {
+            color: var(--text-dim);
+            margin-bottom: 24px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <div class="logo">
+                <div class="logo-icon">📐</div>
+                <span class="logo-text">KineticLens</span>
+            </div>
+            <div class="status-bar">
+                <div class="status-item">
+                    <div class="status-dot" id="cameraStatus"></div>
+                    <span>Camera</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-dot" id="imuStatus"></div>
+                    <span>IMU</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-dot" id="flowStatus"></div>
+                    <span>Flow</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-dot" id="kalmanStatus"></div>
+                    <span>Kalman</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-dot" id="calibStatus"></div>
+                    <span>Calib</span>
+                </div>
+            </div>
+        </header>
+
+        <main class="main">
+            <div class="video-area">
+                <video id="video" autoplay playsinline muted></video>
+                <canvas id="moireOverlay"></canvas>
+                <canvas id="overlay"></canvas>
+
+                <div class="video-placeholder" id="placeholder">
+                    <h2>KineticLens Ready</h2>
+                    <p>Tap Start to begin motion measurement</p>
+                    <p style="font-size: 11px; color: var(--text-dim);">Uses camera + device sensors for precise tracking</p>
+                </div>
+
+                <div class="hud-speed" id="hudSpeed" style="display: none;">
+                    <div><span class="value" id="speedDisplay">0.0</span><span class="unit">m/s</span></div>
+                    <div class="secondary"><span id="speedKmh">0.0</span> km/h</div>
+                </div>
+
+                <div class="hud-orientation" id="hudOrientation" style="display: none;">
+                    <div class="row"><span class="label">Roll</span><span class="val" id="rollDisplay">0°</span></div>
+                    <div class="row"><span class="label">Pitch</span><span class="val" id="pitchDisplay">0°</span></div>
+                    <div class="row"><span class="label">Yaw</span><span class="val" id="yawDisplay">0°</span></div>
+                </div>
+
+                <div class="hud-vertex" id="hudVertex" style="display: none;">
+                    <span id="vertexLabel">1</span>
+                </div>
+
+                <canvas class="hud-compass" id="compass" width="100" height="100" style="display: none;"></canvas>
+            </div>
+
+            <aside class="sidebar">
+                <div class="panel">
+                    <div class="panel-title">Motion</div>
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <div class="metric-label">Speed</div>
+                            <div class="metric-value accent" id="metricSpeed">0.00<span class="metric-unit">m/s</span></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Direction</div>
+                            <div class="metric-value" id="metricDirection">0<span class="metric-unit">°</span></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Flow X</div>
+                            <div class="metric-value small" id="metricFlowX">0.0<span class="metric-unit">px</span></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Flow Y</div>
+                            <div class="metric-value small" id="metricFlowY">0.0<span class="metric-unit">px</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">Scene Measurement</div>
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <div class="metric-label">Camera Speed</div>
+                            <div class="metric-value small" id="metricEgoSpeed">0.0<span class="metric-unit">m/s</span></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Objects Found</div>
+                            <div class="metric-value small accent" id="metricObjectCount">0</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Object Speed</div>
+                            <div class="metric-value small" id="metricObjectSpeed">0.0<span class="metric-unit">m/s</span></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Calib Quality</div>
+                            <div class="metric-value small" id="metricCalibQuality">0<span class="metric-unit">%</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">Rotation</div>
+                    <div class="metric-grid">
+                        <div class="metric-card">
+                            <div class="metric-label">Angular Rate</div>
+                            <div class="metric-value" id="metricOmega">0.0<span class="metric-unit">°/s</span></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Stability</div>
+                            <div class="metric-value" id="metricStability">100<span class="metric-unit">%</span></div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="stabilityBar" style="width: 100%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">24-Cell Orientation (Hurwitz Lattice)</div>
+                    <div class="cell-grid" id="cellGrid"></div>
+                    <div style="margin-top: 12px; font-size: 11px; color: var(--text-dim);">
+                        Vertex: <span id="vertexName" style="color: var(--accent);">1</span>
+                        <span style="float: right;">Index: <span id="vertexIndex">0</span></span>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">Speed History</div>
+                    <div class="graph-container">
+                        <canvas id="graphCanvas" width="288" height="80"></canvas>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">Confidence</div>
+                    <div class="metric-grid">
+                        <div class="metric-card full">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span class="metric-label">Overall Quality</span>
+                                <span class="metric-value small" id="metricConfidence">0%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="confidenceBar" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel" style="font-size: 11px; color: var(--text-dim); line-height: 1.6;">
+                    <div class="panel-title">How It Works</div>
+                    <p><strong style="color: var(--accent);">Flow vectors</strong> track pixel motion between frames.</p>
+                    <p><strong style="color: var(--accent);">Speed</strong> = flow × (distance / focal length) / dt</p>
+                    <p><strong style="color: var(--accent);">24-Cell</strong> quantizes orientation to reduce noise.</p>
+                    <p><strong style="color: var(--accent);">Moiré</strong> fringes shift with motion for visual feedback.</p>
+                    <p style="margin-top: 8px; font-style: italic;">Set scene distance for accurate velocity.</p>
+                </div>
+            </aside>
+        </main>
+
+        <footer class="controls">
+            <button class="btn primary" id="startBtn">
+                <span class="btn-icon">▶</span>
+                <span>Start</span>
+            </button>
+            <button class="btn" id="sensorBtn">
+                <span class="btn-icon">📱</span>
+                <span>Sensors</span>
+            </button>
+            <button class="btn" id="resetBtn">
+                <span class="btn-icon">↺</span>
+                <span>Reset</span>
+            </button>
+
+            <div class="toggle" id="moireToggle">
+                <button class="toggle-btn" data-value="off">Moiré Off</button>
+                <button class="toggle-btn active" data-value="on">On</button>
+            </div>
+
+            <div class="toggle" id="overlayToggle">
+                <button class="toggle-btn active" data-value="full">Full</button>
+                <button class="toggle-btn" data-value="min">Minimal</button>
+            </div>
+
+            <button class="btn" id="logBtn">
+                <span class="btn-icon">⏺</span>
+                <span>Log</span>
+            </button>
+            <button class="btn" id="exportBtn">
+                <span class="btn-icon">📥</span>
+                <span>Export</span>
+            </button>
+
+            <div class="control-group">
+                <span class="control-label">Distance</span>
+                <input type="number" class="control-input" id="distanceInput" value="2.0" min="0.1" max="100" step="0.1">
+                <span class="control-label">m</span>
+            </div>
+        </footer>
+    </div>
+
+    <div class="modal" id="errorModal">
+        <div class="modal-content">
+            <div class="modal-icon">⚠️</div>
+            <h3 class="modal-title" id="errorTitle">Error</h3>
+            <p class="modal-text" id="errorText">Something went wrong.</p>
+            <button class="btn primary" onclick="document.getElementById('errorModal').classList.remove('show')">OK</button>
+        </div>
+    </div>
+
+    <script>
+    // =========================================================================
+    // CONSTANTS
+    // =========================================================================
+
+    const HURWITZ = (() => {
+        const q = [];
+        // Unit quaternions
+        q.push([1,0,0,0], [-1,0,0,0], [0,1,0,0], [0,-1,0,0],
+               [0,0,1,0], [0,0,-1,0], [0,0,0,1], [0,0,0,-1]);
+        // Half-integer quaternions
+        const h = 0.5;
+        for (let w = -1; w <= 1; w += 2)
+            for (let x = -1; x <= 1; x += 2)
+                for (let y = -1; y <= 1; y += 2)
+                    for (let z = -1; z <= 1; z += 2)
+                        q.push([w*h, x*h, y*h, z*h]);
+        return q;
+    })();
+
+    const VERTEX_LABELS = ['1', '-1', 'i', '-i', 'j', '-j', 'k', '-k',
+        '½(++++)', '½(+++-)', '½(++-+)', '½(++--)',
+        '½(+-++)', '½(+-+-)', '½(+--+)', '½(+---)',
+        '½(-+++)', '½(-++-)', '½(-+-+)', '½(-+--)',
+        '½(--++)', '½(--+-)', '½(---+)', '½(----)'];
+
+    // =========================================================================
+    // STATE
+    // =========================================================================
+
+    const state = {
+        running: false,
+        camera: false,
+        sensors: false,
+        moireEnabled: true,
+
+        gyro: { x: 0, y: 0, z: 0 },
+        accel: { x: 0, y: 0, z: 0 },
+        linearAccel: { x: 0, y: 0, z: 0 }, // Gravity-compensated
+
+        orientation: [1, 0, 0, 0],
+        quantizedOrientation: [1, 0, 0, 0], // Smoothed via 24-cell
+        nearestVertex: 0,
+        vertexConfidence: 1.0,
+        lastVertex: 0,
+        vertexStableFrames: 0,
+
+        // Flow field - grid of vectors
+        flowField: [],
+        flowMean: { x: 0, y: 0 },
+        flowMagnitude: 0,
+
+        // Flow decomposition (for understanding ego-motion)
+        flowDecomposition: {
+            translation: { x: 0, y: 0 },  // Lateral motion
+            rotation: 0,                   // Rotation around optical axis
+            expansion: 0,                  // Forward/backward motion (used to estimate distance)
+            ttc: Infinity                  // Inverse of expansion rate (useful for scale estimation)
+        },
+
+        // Feature tracking
+        features: [],           // Detected corner features
+        trackedFeatures: [],    // Features tracked across frames
+        motionTrails: [],       // Trail history for visualization
+
+        // Velocity in m/s (computed from flow + calibration)
+        velocity: { x: 0, y: 0, z: 0 }, // Added z for forward
+        speed: 0,
+        rawSpeed: 0, // Unsmoothed for responsiveness display
+        speedHistory: new Array(60).fill(0),
+
+        // Ego-motion compensation
+        egoMotion: { x: 0, y: 0, rotation: 0 },
+        objectMotion: { x: 0, y: 0 },
+
+        // Scene measurement results (objects detected via ego-motion subtraction)
+        sceneMetrics: {
+            egoSpeed: 0,        // Camera movement speed (m/s)
+            objectCount: 0,     // Number of detected moving objects
+            maxObjectSpeed: 0,  // Fastest object speed (m/s)
+            calibQuality: 0     // Calibration quality (0-100%)
+        },
+
+        // Frame timing for proper physics
+        prevGray: null,
+        prevGrayFull: null,     // Full resolution for feature tracking
+        lastTime: 0,
+        frameTime: 0, // dt in seconds
+        fps: 0,
+
+        // Calibration
+        focalLength: 800, // pixels (updated from video)
+        pixelsPerMeter: 400, // at reference distance
+        autoCalibrating: false,
+        calibrationSamples: [],
+
+        // Adaptive processing
+        processScale: 0.5,      // Current downsample ratio
+        targetScale: 0.5,       // Target scale (smoothly transitions)
+        motionState: 'STATIONARY', // STATIONARY, MOVING, FAST
+        maxFeatures: 100,       // Max features to track
+        trailLength: 20,        // Motion trail history length
+
+        // Accelerometer integration for calibration
+        accelVelocity: { x: 0, y: 0, z: 0 },
+        accelDisplacement: { x: 0, y: 0, z: 0 },
+
+        // Data logging
+        dataLog: [],
+        logging: false,
+        logStartTime: 0,
+
+        // Performance/debug options
+        minimalOverlay: false,  // Reduce overlay drawing for performance
+        showPerfStats: true     // Show timing breakdown
+    };
+
+    // =========================================================================
+    // PERFORMANCE PROFILER
+    // =========================================================================
+
+    const perf = {
+        // Rolling averages (ms)
+        flowTime: 0,
+        drawTime: 0,
+        uiTime: 0,
+        totalTime: 0,
+
+        // Current frame timings
+        _flowStart: 0,
+        _drawStart: 0,
+        _uiStart: 0,
+        _frameStart: 0,
+
+        // Smoothing factor
+        alpha: 0.1,
+
+        startFrame() {
+            this._frameStart = performance.now();
+        },
+
+        startFlow() {
+            this._flowStart = performance.now();
+        },
+
+        endFlow() {
+            const t = performance.now() - this._flowStart;
+            this.flowTime = this.flowTime * (1 - this.alpha) + t * this.alpha;
+        },
+
+        startDraw() {
+            this._drawStart = performance.now();
+        },
+
+        endDraw() {
+            const t = performance.now() - this._drawStart;
+            this.drawTime = this.drawTime * (1 - this.alpha) + t * this.alpha;
+        },
+
+        startUI() {
+            this._uiStart = performance.now();
+        },
+
+        endUI() {
+            const t = performance.now() - this._uiStart;
+            this.uiTime = this.uiTime * (1 - this.alpha) + t * this.alpha;
+        },
+
+        endFrame() {
+            const t = performance.now() - this._frameStart;
+            this.totalTime = this.totalTime * (1 - this.alpha) + t * this.alpha;
+        },
+
+        // Get timing breakdown string
+        getStats() {
+            return `Flow: ${this.flowTime.toFixed(1)}ms | Draw: ${this.drawTime.toFixed(1)}ms | UI: ${this.uiTime.toFixed(1)}ms | Total: ${this.totalTime.toFixed(1)}ms`;
+        }
+    };
+
+    // =========================================================================
+    // DOM
+    // =========================================================================
+
+    const $ = id => document.getElementById(id);
+    const video = $('video');
+    const overlay = $('overlay');
+    const ctx = overlay.getContext('2d');
+    const moireCanvas = $('moireOverlay');
+    const moireCtx = moireCanvas.getContext('2d');
+    const compass = $('compass');
+    const compassCtx = compass.getContext('2d');
+    const graph = $('graphCanvas');
+    const graphCtx = graph.getContext('2d');
+
+    // Init 24-cell grid
+    const cellGrid = $('cellGrid');
+    for (let i = 0; i < 24; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.textContent = i;
+        cell.id = `cell${i}`;
+        cellGrid.appendChild(cell);
+    }
+
+    // =========================================================================
+    // QUATERNION MATH
+    // =========================================================================
+
+    const quat = {
+        mult: (a, b) => [
+            a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+            a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+            a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+            a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0]
+        ],
+        norm: q => {
+            const m = Math.sqrt(q[0]**2 + q[1]**2 + q[2]**2 + q[3]**2);
+            return m > 1e-6 ? [q[0]/m, q[1]/m, q[2]/m, q[3]/m] : [1, 0, 0, 0];
+        },
+        fromAxisAngle: (ax, ay, az, angle) => {
+            const m = Math.sqrt(ax**2 + ay**2 + az**2);
+            if (m < 1e-6) return [1, 0, 0, 0];
+            const ha = angle / 2, s = Math.sin(ha) / m;
+            return [Math.cos(ha), ax * s, ay * s, az * s];
+        },
+        dist: (a, b) => {
+            let d = Math.abs(a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3]);
+            return 2 * Math.acos(Math.min(1, d));
+        },
+        toEuler: q => {
+            const [w, x, y, z] = q;
+            const sinp = 2 * (w * y - z * x);
+            let pitch, roll, yaw;
+            if (Math.abs(sinp) >= 0.999) {
+                pitch = Math.sign(sinp) * Math.PI / 2;
+                roll = 0;
+                yaw = 2 * Math.atan2(z, w);
+            } else {
+                pitch = Math.asin(sinp);
+                roll = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
+                yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+            }
+            return { roll: roll * 57.2958, pitch: pitch * 57.2958, yaw: yaw * 57.2958 };
+        }
+    };
+
+    function findNearestVertex(q) {
+        let best = 0, bestDist = Infinity;
+        for (let i = 0; i < 24; i++) {
+            const d = quat.dist(q, HURWITZ[i]);
+            if (d < bestDist) { bestDist = d; best = i; }
+        }
+        return best;
+    }
+
+    // =========================================================================
+    // IMU
+    // =========================================================================
+
+    const imu = {
+        orientation: [1, 0, 0, 0],
+        bias: [0, 0, 0],
+
+        update(gyro, accel, dt) {
+            if (dt <= 0 || dt > 0.5) return;
+
+            const gx = gyro.x - this.bias[0];
+            const gy = gyro.y - this.bias[1];
+            const gz = gyro.z - this.bias[2];
+
+            const angle = Math.sqrt(gx**2 + gy**2 + gz**2) * dt;
+            if (angle > 1e-5) {
+                const delta = quat.fromAxisAngle(gx, gy, gz, angle);
+                this.orientation = quat.norm(quat.mult(this.orientation, delta));
+            }
+
+            // Bias learning when stationary
+            const am = Math.sqrt(accel.x**2 + accel.y**2 + accel.z**2);
+            const gm = Math.sqrt(gyro.x**2 + gyro.y**2 + gyro.z**2);
+            if (am > 9 && am < 11 && gm < 0.1) {
+                this.bias[0] += 0.001 * gyro.x;
+                this.bias[1] += 0.001 * gyro.y;
+                this.bias[2] += 0.001 * gyro.z;
+            }
+        },
+
+        reset() {
+            this.orientation = [1, 0, 0, 0];
+            this.bias = [0, 0, 0];
+        }
+    };
+
+    // =========================================================================
+    // ADAPTIVE RESOLUTION
+    // =========================================================================
+
+    function updateAdaptiveScale() {
+        const motion = Math.max(state.flowMagnitude, state.gyro.x**2 + state.gyro.y**2 + state.gyro.z**2);
+
+        // Determine target scale based on motion
+        if (motion < 1) {
+            state.targetScale = 1.0;      // Slow motion: full resolution
+            state.motionState = 'STATIONARY';
+        } else if (motion < 5) {
+            state.targetScale = 0.75;     // Medium motion: 75%
+            state.motionState = 'MOVING';
+        } else {
+            state.targetScale = 0.5;      // Fast motion: 50%
+            state.motionState = 'FAST';
+        }
+
+        // Smooth transition (avoid jarring changes)
+        state.processScale = state.processScale * 0.9 + state.targetScale * 0.1;
+
+        // Clamp to valid range
+        state.processScale = Math.max(0.25, Math.min(1.0, state.processScale));
+    }
+
+    // =========================================================================
+    // GRAVITY COMPENSATION
+    // =========================================================================
+
+    function rotateVectorByQuat(v, q) {
+        // Rotate vector v by quaternion q: q * v * q^-1
+        const [w, x, y, z] = q;
+        const [vx, vy, vz] = v;
+
+        // Quaternion * vector (treating vector as pure quaternion [0, vx, vy, vz])
+        const qv = [
+            -x*vx - y*vy - z*vz,
+            w*vx + y*vz - z*vy,
+            w*vy + z*vx - x*vz,
+            w*vz + x*vy - y*vx
+        ];
+
+        // Result * conjugate(q)
+        return [
+            qv[0]*(-x) + qv[1]*w + qv[2]*(-z) - qv[3]*(-y),
+            qv[0]*(-y) + qv[2]*w + qv[3]*(-x) - qv[1]*(-z),
+            qv[0]*(-z) + qv[3]*w + qv[1]*(-y) - qv[2]*(-x)
+        ];
+    }
+
+    function updateGravityCompensation() {
+        // Expected gravity in body frame based on current orientation
+        // World gravity is [0, 0, 9.81] pointing down
+        const gravityWorld = [0, 0, 9.81];
+        const gravityBody = rotateVectorByQuat(gravityWorld, state.orientation);
+
+        // Linear acceleration = measured - gravity
+        state.linearAccel = {
+            x: state.accel.x - gravityBody[0],
+            y: state.accel.y - gravityBody[1],
+            z: state.accel.z - gravityBody[2]
+        };
+
+        // Integrate for velocity (with strong damping to prevent drift)
+        const dt = state.frameTime;
+        if (dt > 0 && dt < 0.1) {
+            state.accelVelocity.x = state.accelVelocity.x * 0.95 + state.linearAccel.x * dt;
+            state.accelVelocity.y = state.accelVelocity.y * 0.95 + state.linearAccel.y * dt;
+            state.accelVelocity.z = state.accelVelocity.z * 0.95 + state.linearAccel.z * dt;
+        }
+
+        // When stationary, use accel to refine orientation (gravity points down)
+        const accelMag = Math.sqrt(state.accel.x**2 + state.accel.y**2 + state.accel.z**2);
+        const gyroMag = Math.sqrt(state.gyro.x**2 + state.gyro.y**2 + state.gyro.z**2);
+
+        if (Math.abs(accelMag - 9.81) < 0.5 && gyroMag < 0.1) {
+            // Stationary: good time to calibrate
+            state.motionState = 'STATIONARY';
+        }
+    }
+
+    // =========================================================================
+    // SMART POLLING - Skip frames when stationary to save battery
+    // =========================================================================
+
+    const smartPolling = {
+        frameSkipCounter: 0,
+        stationaryFrames: 0,
+        lastProcessTime: 0,
+
+        shouldProcess() {
+            const now = performance.now();
+            const timeSinceLast = now - this.lastProcessTime;
+
+            if (state.motionState === 'FAST') {
+                // Always process when moving fast
+                this.stationaryFrames = 0;
+                this.lastProcessTime = now;
+                return true;
+            } else if (state.motionState === 'MOVING') {
+                // Process every other frame
+                this.stationaryFrames = 0;
+                this.frameSkipCounter++;
+                if (this.frameSkipCounter % 2 === 0) {
+                    this.lastProcessTime = now;
+                    return true;
+                }
+                return false;
+            } else {
+                // STATIONARY - process rarely
+                this.stationaryFrames++;
+
+                // Still process occasionally to detect motion start
+                if (this.stationaryFrames < 30) {
+                    // First second: every 3rd frame
+                    this.frameSkipCounter++;
+                    if (this.frameSkipCounter % 3 === 0) {
+                        this.lastProcessTime = now;
+                        return true;
+                    }
+                } else {
+                    // After 1 second stationary: every 10th frame
+                    this.frameSkipCounter++;
+                    if (this.frameSkipCounter % 10 === 0) {
+                        this.lastProcessTime = now;
+                        return true;
+                    }
+                }
+
+                // But always process if we haven't in 500ms
+                if (timeSinceLast > 500) {
+                    this.lastProcessTime = now;
+                    return true;
+                }
+
+                return false;
+            }
+        },
+
+        reset() {
+            this.frameSkipCounter = 0;
+            this.stationaryFrames = 0;
+            this.lastProcessTime = 0;
+        }
+    };
+
+    // =========================================================================
+    // AUDIO FEEDBACK - Calibration & Object Detection
+    // =========================================================================
+
+    const audioFeedback = {
+        audioCtx: null,
+        lastBeepTime: 0,
+        enabled: false, // Disabled by default, enable via settings
+        lastCalibMilestone: 0,
+
+        init() {
+            // Create audio context on first user interaction
+            if (!this.audioCtx) {
+                try {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.log('Audio not available');
+                }
+            }
+        },
+
+        beep(frequency, duration, volume = 0.3) {
+            if (!this.audioCtx || !this.enabled) return;
+
+            const now = performance.now();
+            if (now - this.lastBeepTime < 200) return; // Rate limit
+            this.lastBeepTime = now;
+
+            try {
+                const osc = this.audioCtx.createOscillator();
+                const gain = this.audioCtx.createGain();
+
+                osc.connect(gain);
+                gain.connect(this.audioCtx.destination);
+
+                osc.frequency.value = frequency;
+                osc.type = 'sine';
+
+                gain.gain.setValueAtTime(volume, this.audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + duration);
+
+                osc.start(this.audioCtx.currentTime);
+                osc.stop(this.audioCtx.currentTime + duration);
+            } catch (e) {}
+        },
+
+        // Notify when calibration reaches a new milestone
+        calibrationMilestone(quality) {
+            const milestone = Math.floor(quality / 25) * 25; // 0, 25, 50, 75, 100
+            if (milestone > this.lastCalibMilestone && milestone > 0) {
+                this.lastCalibMilestone = milestone;
+                // Rising tone for calibration progress
+                this.beep(440 + milestone * 2, 0.15, 0.3);
+            }
+        },
+
+        // Notify when a fast-moving object is detected
+        objectDetected(speed) {
+            if (speed > 2.0) {
+                // High-speed object: distinctive sound
+                this.beep(660, 0.1, 0.4);
+            }
+        }
+    };
+
+    // =========================================================================
+    // FLOW FIELD DECOMPOSITION
+    // =========================================================================
+
+    function decomposeFlowField(flowField, cx, cy, focalLength) {
+        let sumTx = 0, sumTy = 0;     // Translation
+        let sumCurl = 0;               // Rotation (around optical axis)
+        let sumDiv = 0;                // Expansion/contraction
+        let count = 0;
+        let curlCount = 0;
+
+        for (const f of flowField) {
+            if (f.quality < 0.3 || f.magnitude < 0.3) continue;
+
+            const rx = f.x - cx;  // Relative to center
+            const ry = f.y - cy;
+            const r2 = rx*rx + ry*ry;
+
+            // Translation component (uniform flow)
+            sumTx += f.dx;
+            sumTy += f.dy;
+
+            // Curl (rotation around optical axis)
+            // curl ≈ (rx*vy - ry*vx) / r²
+            if (r2 > 2500) {  // Only use points far from center
+                sumCurl += (rx * f.dy - ry * f.dx) / r2;
+                curlCount++;
+
+                // Divergence (expansion/contraction)
+                // div ≈ (rx*vx + ry*vy) / r²
+                sumDiv += (rx * f.dx + ry * f.dy) / r2;
+            }
+
+            count++;
+        }
+
+        if (count === 0) return state.flowDecomposition;
+
+        const dt = state.frameTime || (1/30);
+
+        // Update decomposition
+        state.flowDecomposition = {
+            // Lateral translation (pixels/frame → m/s)
+            translation: {
+                x: (sumTx / count) / dt * (state.distanceInput || 2) / focalLength,
+                y: (sumTy / count) / dt * (state.distanceInput || 2) / focalLength
+            },
+            // Rotation around Z axis (rad/s)
+            rotation: curlCount > 0 ? (sumCurl / curlCount) / dt : 0,
+            // Expansion rate (1/s) - positive = approaching
+            expansion: curlCount > 0 ? (sumDiv / curlCount) / dt : 0,
+            // Time to collision (seconds)
+            ttc: sumDiv > 0.001 ? Math.abs(1 / (sumDiv / curlCount / dt)) : Infinity
+        };
+
+        return state.flowDecomposition;
+    }
+
+    // =========================================================================
+    // 24-CELL HYSTERESIS FILTERING
+    // =========================================================================
+
+    const latticeFilter = {
+        switchThreshold: 0.7,  // Must be 70% closer to switch (hysteresis)
+        minStableFrames: 3,    // Must be stable for 3 frames to switch
+
+        update(orientation) {
+            const nearest = findNearestVertex(orientation);
+            const distToNearest = quat.dist(orientation, HURWITZ[nearest]);
+            const distToCurrent = quat.dist(orientation, HURWITZ[state.nearestVertex]);
+
+            // Confidence: how close to current vertex (0-1)
+            state.vertexConfidence = Math.max(0, 1 - (distToCurrent / (Math.PI / 3)));
+
+            // Check if we should switch vertices
+            if (nearest !== state.nearestVertex) {
+                // Only switch if significantly closer (hysteresis)
+                if (distToNearest < distToCurrent * this.switchThreshold) {
+                    state.vertexStableFrames++;
+                    if (state.vertexStableFrames >= this.minStableFrames) {
+                        state.lastVertex = state.nearestVertex;
+                        state.nearestVertex = nearest;
+                        state.vertexStableFrames = 0;
+
+                        // Log vertex transition for motion classification
+                        if (state.logging) {
+                            console.log(`Vertex transition: ${state.lastVertex} → ${nearest}`);
+                        }
+                    }
+                } else {
+                    state.vertexStableFrames = 0;
+                }
+            } else {
+                state.vertexStableFrames = 0;
+            }
+
+            // SLERP towards quantized orientation
+            const targetQ = HURWITZ[state.nearestVertex];
+            const blendFactor = 0.15;
+            state.quantizedOrientation = quat.norm([
+                orientation[0] * (1 - blendFactor) + targetQ[0] * blendFactor,
+                orientation[1] * (1 - blendFactor) + targetQ[1] * blendFactor,
+                orientation[2] * (1 - blendFactor) + targetQ[2] * blendFactor,
+                orientation[3] * (1 - blendFactor) + targetQ[3] * blendFactor
+            ]);
+
+            return state.nearestVertex;
+        }
+    };
+
+    // =========================================================================
+    // AUTO CALIBRATION
+    // =========================================================================
+
+    function updateAutoCalibration() {
+        if (!state.sensors || state.motionState === 'STATIONARY') return;
+
+        // Compare accelerometer velocity with optical flow velocity
+        const accelSpeed = Math.sqrt(
+            state.accelVelocity.x**2 +
+            state.accelVelocity.y**2
+        );
+
+        const flowSpeed = state.speed;
+
+        // Only calibrate when both have reasonable values
+        if (accelSpeed > 0.1 && flowSpeed > 0.1) {
+            const ratio = accelSpeed / flowSpeed;
+
+            // Sanity check: ratio should be between 0.1 and 10
+            if (ratio > 0.1 && ratio < 10) {
+                state.calibrationSamples.push(ratio);
+
+                // Use median of last 50 samples
+                if (state.calibrationSamples.length > 50) {
+                    state.calibrationSamples.shift();
+                }
+
+                if (state.calibrationSamples.length >= 20) {
+                    const sorted = [...state.calibrationSamples].sort((a, b) => a - b);
+                    const median = sorted[Math.floor(sorted.length / 2)];
+
+                    // Slowly adjust calibration
+                    state.pixelsPerMeter = state.pixelsPerMeter * 0.99 + (state.pixelsPerMeter * median) * 0.01;
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // QUATERNION-SPACE KALMAN FILTER (MEKF)
+    // =========================================================================
+
+    // Exp map: tangent vector (3D) → quaternion
+    function expMap(v) {
+        const angle = Math.sqrt(v[0]**2 + v[1]**2 + v[2]**2);
+        if (angle < 1e-8) return [1, 0, 0, 0];
+        const halfAngle = angle / 2;
+        const s = Math.sin(halfAngle) / angle;
+        return [Math.cos(halfAngle), v[0] * s, v[1] * s, v[2] * s];
+    }
+
+    // Log map: quaternion → tangent vector (3D)
+    function logMap(q) {
+        const sinHalfAngle = Math.sqrt(q[1]**2 + q[2]**2 + q[3]**2);
+        if (sinHalfAngle < 1e-8) return [0, 0, 0];
+        const angle = 2 * Math.atan2(sinHalfAngle, q[0]);
+        const s = angle / sinHalfAngle;
+        return [q[1] * s, q[2] * s, q[3] * s];
+    }
+
+    const kalman = {
+        // State: orientation quaternion
+        q: [1, 0, 0, 0],
+        // Angular velocity estimate
+        omega: [0, 0, 0],
+        // Gyro bias estimate
+        bias: [0, 0, 0],
+        // Covariance (simplified: just diagonal variances)
+        P_orient: 0.1,    // Orientation uncertainty
+        P_bias: 0.01,     // Bias uncertainty
+        // Process noise
+        Q_omega: 0.001,   // Angular velocity noise
+        Q_bias: 0.00001,  // Bias drift
+        // Measurement noise
+        R_gyro: 0.01,     // Gyroscope noise
+        R_accel: 0.1,     // Accelerometer noise (for gravity)
+        R_flow: 0.05,     // Optical flow rotation noise
+
+        predict(gyro, dt) {
+            if (dt <= 0 || dt > 0.2) return;
+
+            // Correct gyro with bias
+            const omega = [
+                gyro.x - this.bias[0],
+                gyro.y - this.bias[1],
+                gyro.z - this.bias[2]
+            ];
+            this.omega = omega;
+
+            // Predict orientation: q = q ⊗ exp(ω * dt)
+            const deltaAngle = [omega[0] * dt, omega[1] * dt, omega[2] * dt];
+            const deltaQ = expMap(deltaAngle);
+            this.q = quat.norm(quat.mult(this.q, deltaQ));
+
+            // Increase uncertainty
+            this.P_orient += this.Q_omega * dt;
+            this.P_bias += this.Q_bias * dt;
+        },
+
+        updateAccel(accel) {
+            // Use accelerometer to correct roll/pitch (gravity direction)
+            const accelMag = Math.sqrt(accel.x**2 + accel.y**2 + accel.z**2);
+            if (accelMag < 8 || accelMag > 12) return; // Not reliable
+
+            // Normalize accelerometer
+            const accelNorm = [accel.x / accelMag, accel.y / accelMag, accel.z / accelMag];
+
+            // Expected gravity in body frame (assuming world Z is up)
+            const expectedGrav = rotateVectorByQuat([0, 0, 1], this.q);
+
+            // Error: cross product gives rotation axis/magnitude
+            const error = [
+                expectedGrav[1] * accelNorm[2] - expectedGrav[2] * accelNorm[1],
+                expectedGrav[2] * accelNorm[0] - expectedGrav[0] * accelNorm[2],
+                expectedGrav[0] * accelNorm[1] - expectedGrav[1] * accelNorm[0]
+            ];
+
+            // Kalman gain (simplified)
+            const K = this.P_orient / (this.P_orient + this.R_accel);
+
+            // Apply correction
+            const correction = [error[0] * K, error[1] * K, error[2] * K];
+            const corrQ = expMap(correction);
+            this.q = quat.norm(quat.mult(corrQ, this.q));
+
+            // Update uncertainty
+            this.P_orient *= (1 - K);
+
+            // Update bias (slow)
+            this.bias[0] += error[0] * K * 0.01;
+            this.bias[1] += error[1] * K * 0.01;
+            this.bias[2] += error[2] * K * 0.01;
+        },
+
+        updateFlow(rotationFromFlow) {
+            // Use optical flow rotation to correct yaw
+            // rotationFromFlow is rad/s around Z axis
+
+            // Current yaw rate from gyro
+            const gyroYawRate = this.omega[2];
+
+            // Innovation
+            const innovation = rotationFromFlow - gyroYawRate;
+
+            // Kalman gain
+            const K = this.P_orient / (this.P_orient + this.R_flow);
+
+            // Apply yaw correction
+            const correction = expMap([0, 0, innovation * K * 0.1]);
+            this.q = quat.norm(quat.mult(correction, this.q));
+
+            // Update bias
+            this.bias[2] += innovation * K * 0.001;
+
+            this.P_orient *= (1 - K * 0.1);
+        },
+
+        getOrientation() {
+            return this.q;
+        },
+
+        reset() {
+            this.q = [1, 0, 0, 0];
+            this.omega = [0, 0, 0];
+            this.bias = [0, 0, 0];
+            this.P_orient = 0.1;
+            this.P_bias = 0.01;
+        }
+    };
+
+    // =========================================================================
+    // MULTI-RATE SENSOR FUSION
+    // =========================================================================
+
+    const multiRate = {
+        imuBuffer: [],        // Buffer IMU samples between camera frames
+        maxBufferSize: 10,
+        lastCameraTime: 0,
+
+        // Called at IMU rate (~60-100Hz)
+        onIMU(gyro, accel, timestamp) {
+            const dt = this.imuBuffer.length > 0
+                ? (timestamp - this.imuBuffer[this.imuBuffer.length - 1].timestamp) / 1000
+                : 1/60;
+
+            // Run Kalman prediction
+            kalman.predict(gyro, dt);
+
+            // Update with accelerometer when stationary
+            const gyroMag = Math.sqrt(gyro.x**2 + gyro.y**2 + gyro.z**2);
+            if (gyroMag < 0.1) {
+                kalman.updateAccel(accel);
+            }
+
+            // Buffer for camera correlation
+            this.imuBuffer.push({ gyro, accel, timestamp });
+            if (this.imuBuffer.length > this.maxBufferSize) {
+                this.imuBuffer.shift();
+            }
+        },
+
+        // Called at camera rate (~30Hz)
+        onCamera(flowDecomposition, timestamp) {
+            const dt = (timestamp - this.lastCameraTime) / 1000;
+            this.lastCameraTime = timestamp;
+
+            if (dt > 0 && dt < 0.2) {
+                // Use optical flow rotation to update Kalman
+                kalman.updateFlow(flowDecomposition.rotation);
+            }
+
+            // Predict flow from IMU buffer (for ego-motion compensation)
+            const predictedRotation = this.predictRotationFromBuffer(dt);
+
+            // Residual = object motion (not camera)
+            const residualRotation = flowDecomposition.rotation - predictedRotation;
+
+            return {
+                predicted: predictedRotation,
+                residual: residualRotation
+            };
+        },
+
+        predictRotationFromBuffer(dt) {
+            if (this.imuBuffer.length < 2) return 0;
+
+            // Integrate gyro Z from buffer
+            let totalRotation = 0;
+            for (let i = 1; i < this.imuBuffer.length; i++) {
+                const sample = this.imuBuffer[i];
+                const prevSample = this.imuBuffer[i - 1];
+                const sampleDt = (sample.timestamp - prevSample.timestamp) / 1000;
+                totalRotation += (sample.gyro.z - kalman.bias[2]) * sampleDt;
+            }
+
+            return totalRotation / dt; // Convert to rate
+        },
+
+        reset() {
+            this.imuBuffer = [];
+            this.lastCameraTime = 0;
+            kalman.reset();
+        }
+    };
+
+    // =========================================================================
+    // 24-CELL ADJACENCY GRAPH
+    // =========================================================================
+
+    // Precompute which vertices are neighbors (angular distance < 70°)
+    const CELL24_ADJACENCY = (() => {
+        const adj = [];
+        const neighborThreshold = 1.2; // ~69 degrees in radians
+
+        for (let i = 0; i < 24; i++) {
+            adj[i] = [];
+            for (let j = 0; j < 24; j++) {
+                if (i !== j) {
+                    const dist = quat.dist(HURWITZ[i], HURWITZ[j]);
+                    if (dist < neighborThreshold) {
+                        adj[i].push({
+                            vertex: j,
+                            distance: dist,
+                            // Rotation to get from i to j
+                            rotation: quat.mult(
+                                [HURWITZ[j][0], -HURWITZ[j][1], -HURWITZ[j][2], -HURWITZ[j][3]],
+                                HURWITZ[i]
+                            )
+                        });
+                    }
+                }
+            }
+            // Sort by distance
+            adj[i].sort((a, b) => a.distance - b.distance);
+        }
+        return adj;
+    })();
+
+    // Classify motion based on vertex transitions
+    function classifyVertexTransition(fromVertex, toVertex) {
+        if (fromVertex === toVertex) {
+            return { type: 'STABLE', angle: 0 };
+        }
+
+        // Check if direct neighbor
+        const neighbor = CELL24_ADJACENCY[fromVertex].find(n => n.vertex === toVertex);
+        if (neighbor) {
+            // Determine rotation type from quaternion
+            const rot = neighbor.rotation;
+            const axis = [rot[1], rot[2], rot[3]];
+            const axisMag = Math.sqrt(axis[0]**2 + axis[1]**2 + axis[2]**2);
+
+            let rotationType = 'GENERAL';
+            if (axisMag > 0.01) {
+                const normAxis = [axis[0]/axisMag, axis[1]/axisMag, axis[2]/axisMag];
+                // Check major axes
+                if (Math.abs(normAxis[0]) > 0.9) rotationType = 'ROLL';
+                else if (Math.abs(normAxis[1]) > 0.9) rotationType = 'PITCH';
+                else if (Math.abs(normAxis[2]) > 0.9) rotationType = 'YAW';
+            }
+
+            return {
+                type: 'NEIGHBOR',
+                angle: neighbor.distance * 57.2958, // degrees
+                rotationType,
+                axis: axis
+            };
+        }
+
+        // Not a direct neighbor - find shortest path
+        return {
+            type: 'DISTANT',
+            angle: quat.dist(HURWITZ[fromVertex], HURWITZ[toVertex]) * 57.2958
+        };
+    }
+
+    // Track vertex transitions for motion analysis
+    const motionClassifier = {
+        transitionHistory: [],
+        maxHistory: 20,
+
+        onTransition(fromVertex, toVertex) {
+            const classification = classifyVertexTransition(fromVertex, toVertex);
+            classification.timestamp = Date.now();
+            classification.from = fromVertex;
+            classification.to = toVertex;
+
+            this.transitionHistory.push(classification);
+            if (this.transitionHistory.length > this.maxHistory) {
+                this.transitionHistory.shift();
+            }
+
+            return classification;
+        },
+
+        getRecentMotionType() {
+            if (this.transitionHistory.length < 2) return 'STATIONARY';
+
+            const recent = this.transitionHistory.slice(-5);
+            const types = recent.map(t => t.rotationType).filter(t => t);
+
+            // Count rotation types
+            const counts = {};
+            for (const t of types) {
+                counts[t] = (counts[t] || 0) + 1;
+            }
+
+            // Return dominant type
+            let maxType = 'MIXED';
+            let maxCount = 0;
+            for (const [type, count] of Object.entries(counts)) {
+                if (count > maxCount) {
+                    maxCount = count;
+                    maxType = type;
+                }
+            }
+
+            return maxType;
+        },
+
+        reset() {
+            this.transitionHistory = [];
+        }
+    };
+
+    // =========================================================================
+    // IMAGE PROCESSING UTILITIES
+    // =========================================================================
+
+    // Downsample image for faster processing
+    function downsample(imageData, scale) {
+        const sw = imageData.width, sh = imageData.height;
+        const dw = Math.floor(sw * scale), dh = Math.floor(sh * scale);
+        const src = imageData.data;
+        const gray = new Uint8Array(dw * dh);
+
+        const stepX = 1 / scale, stepY = 1 / scale;
+
+        for (let dy = 0; dy < dh; dy++) {
+            const sy = Math.floor(dy * stepY);
+            for (let dx = 0; dx < dw; dx++) {
+                const sx = Math.floor(dx * stepX);
+                const si = (sy * sw + sx) * 4;
+                // Fast grayscale conversion
+                gray[dy * dw + dx] = (src[si] * 77 + src[si + 1] * 150 + src[si + 2] * 29) >> 8;
+            }
+        }
+
+        return { data: gray, width: dw, height: dh };
+    }
+
+    // Compute image gradients for corner detection
+    function computeGradients(gray, w, h) {
+        const Ix = new Float32Array(w * h);
+        const Iy = new Float32Array(w * h);
+
+        for (let y = 1; y < h - 1; y++) {
+            for (let x = 1; x < w - 1; x++) {
+                const i = y * w + x;
+                // Sobel-like gradient
+                Ix[i] = (gray[i + 1] - gray[i - 1]) * 0.5;
+                Iy[i] = (gray[i + w] - gray[i - w]) * 0.5;
+            }
+        }
+
+        return { Ix, Iy };
+    }
+
+    // Harris corner response
+    function harrisResponse(Ix, Iy, w, h, x, y, windowSize = 3) {
+        let Ixx = 0, Iyy = 0, Ixy = 0;
+        const half = Math.floor(windowSize / 2);
+
+        for (let wy = -half; wy <= half; wy++) {
+            for (let wx = -half; wx <= half; wx++) {
+                const i = (y + wy) * w + (x + wx);
+                if (i >= 0 && i < w * h) {
+                    const ix = Ix[i], iy = Iy[i];
+                    Ixx += ix * ix;
+                    Iyy += iy * iy;
+                    Ixy += ix * iy;
+                }
+            }
+        }
+
+        // Harris response: det(M) - k * trace(M)^2
+        const det = Ixx * Iyy - Ixy * Ixy;
+        const trace = Ixx + Iyy;
+        const k = 0.04;
+        return det - k * trace * trace;
+    }
+
+    // Detect corner features
+    function detectFeatures(gray, w, h, maxFeatures = 100) {
+        const { Ix, Iy } = computeGradients(gray, w, h);
+        const responses = [];
+        const threshold = 1000;
+        const margin = 10;
+
+        // Compute Harris response at grid points
+        for (let y = margin; y < h - margin; y += 8) {
+            for (let x = margin; x < w - margin; x += 8) {
+                const r = harrisResponse(Ix, Iy, w, h, x, y, 5);
+                if (r > threshold) {
+                    responses.push({ x, y, response: r });
+                }
+            }
+        }
+
+        // Sort by response and take top N
+        responses.sort((a, b) => b.response - a.response);
+        return responses.slice(0, maxFeatures);
+    }
+
+    // Track a single feature using Lucas-Kanade
+    function trackFeature(prevGray, currGray, w, h, fx, fy, windowSize = 15) {
+        const half = Math.floor(windowSize / 2);
+
+        // Build system of equations: A^T A d = A^T b
+        let Ixx = 0, Iyy = 0, Ixy = 0, Ixt = 0, Iyt = 0;
+
+        for (let wy = -half; wy <= half; wy++) {
+            for (let wx = -half; wx <= half; wx++) {
+                const x = fx + wx, y = fy + wy;
+                if (x < 1 || x >= w - 1 || y < 1 || y >= h - 1) continue;
+
+                const i = y * w + x;
+                const Ix = (currGray[i + 1] - currGray[i - 1]) * 0.5;
+                const Iy = (currGray[i + w] - currGray[i - w]) * 0.5;
+                const It = currGray[i] - prevGray[i];
+
+                Ixx += Ix * Ix;
+                Iyy += Iy * Iy;
+                Ixy += Ix * Iy;
+                Ixt += Ix * It;
+                Iyt += Iy * It;
+            }
+        }
+
+        // Solve 2x2 system
+        const det = Ixx * Iyy - Ixy * Ixy;
+        if (Math.abs(det) < 1e-6) return null;
+
+        const dx = (Iyy * (-Ixt) - Ixy * (-Iyt)) / det;
+        const dy = (Ixx * (-Iyt) - Ixy * (-Ixt)) / det;
+
+        // Reject large displacements
+        if (Math.abs(dx) > 20 || Math.abs(dy) > 20) return null;
+
+        return { x: fx + dx, y: fy + dy, dx, dy };
+    }
+
+    // =========================================================================
+    // OPTICAL FLOW - Lucas-Kanade style block matching (with downsampling)
+    // =========================================================================
+
+    function computeFlow(imageData) {
+        // Downsample for performance
+        const scale = state.processScale;
+        const { data: gray, width: w, height: h } = downsample(imageData, scale);
+
+        if (!state.prevGray || state.prevGray.length !== gray.length) {
+            state.prevGray = gray;
+            state.prevGrayWidth = w;
+            state.prevGrayHeight = h;
+            return null;
+        }
+
+        // Grid parameters - adjusted for downsampled image
+        const gridSize = Math.floor(24 * scale);
+        const blockSize = Math.floor(8 * scale);
+        const searchRadius = Math.floor(12 * scale);
+        const searchStep = 2;
+
+        const flowField = [];
+        let totalDx = 0, totalDy = 0, validCount = 0;
+
+        const margin = searchRadius + blockSize;
+
+        for (let gy = margin; gy < h - margin; gy += gridSize) {
+            for (let gx = margin; gx < w - margin; gx += gridSize) {
+                let bestDx = 0, bestDy = 0, bestSAD = Infinity;
+
+                // Block matching with hierarchical search
+                // First coarse pass
+                for (let dy = -searchRadius; dy <= searchRadius; dy += 4) {
+                    for (let dx = -searchRadius; dx <= searchRadius; dx += 4) {
+                        let sad = 0;
+                        for (let by = -blockSize; by < blockSize; by += 2) {
+                            for (let bx = -blockSize; bx < blockSize; bx += 2) {
+                                const i1 = (gy + by) * w + (gx + bx);
+                                const i2 = (gy + by + dy) * w + (gx + bx + dx);
+                                sad += Math.abs(gray[i1] - state.prevGray[i2]);
+                            }
+                        }
+                        if (sad < bestSAD) { bestSAD = sad; bestDx = dx; bestDy = dy; }
+                    }
+                }
+
+                // Refine around best match
+                const refineDx = bestDx, refineDy = bestDy;
+                for (let dy = refineDy - 3; dy <= refineDy + 3; dy += 1) {
+                    for (let dx = refineDx - 3; dx <= refineDx + 3; dx += 1) {
+                        let sad = 0;
+                        for (let by = -blockSize; by < blockSize; by += 2) {
+                            for (let bx = -blockSize; bx < blockSize; bx += 2) {
+                                const i1 = (gy + by) * w + (gx + bx);
+                                const i2 = (gy + by + dy) * w + (gx + bx + dx);
+                                if (i2 >= 0 && i2 < gray.length) {
+                                    sad += Math.abs(gray[i1] - state.prevGray[i2]);
+                                }
+                            }
+                        }
+                        if (sad < bestSAD) { bestSAD = sad; bestDx = dx; bestDy = dy; }
+                    }
+                }
+
+                // Quality threshold - lower SAD = better match
+                const matchQuality = 1 - Math.min(1, bestSAD / 5000);
+                const magnitude = Math.sqrt(bestDx ** 2 + bestDy ** 2);
+
+                // Scale coordinates back to full resolution for display
+                flowField.push({
+                    x: gx / scale,
+                    y: gy / scale,
+                    dx: bestDx / scale,
+                    dy: bestDy / scale,
+                    quality: matchQuality,
+                    magnitude: magnitude / scale
+                });
+
+                // Only count good matches with actual motion
+                if (matchQuality > 0.4 && magnitude > 0.5) {
+                    totalDx += bestDx;
+                    totalDy += bestDy;
+                    validCount++;
+                }
+            }
+        }
+
+        state.prevGray = gray;
+        state.flowField = flowField;
+
+        // Scale flow back to full resolution
+        const flowScale = 1 / scale;
+        return validCount > 2 ? {
+            x: (totalDx / validCount) * flowScale,
+            y: (totalDy / validCount) * flowScale,
+            count: validCount,
+            total: flowField.length
+        } : { x: 0, y: 0, count: 0, total: flowField.length };
+    }
+
+    // =========================================================================
+    // FEATURE TRACKING AND MOTION TRAILS
+    // =========================================================================
+
+    function updateFeatureTracking(imageData) {
+        const w = imageData.width, h = imageData.height;
+        const gray = new Uint8Array(w * h);
+        const d = imageData.data;
+
+        // Convert to grayscale at full resolution for feature tracking
+        for (let i = 0; i < gray.length; i++) {
+            const j = i * 4;
+            gray[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+        }
+
+        // If we don't have enough tracked features, detect new ones
+        if (state.trackedFeatures.length < state.maxFeatures / 2) {
+            const newFeatures = detectFeatures(gray, w, h, state.maxFeatures - state.trackedFeatures.length);
+            for (const f of newFeatures) {
+                // Check if we already have a feature nearby
+                const tooClose = state.trackedFeatures.some(
+                    tf => Math.abs(tf.x - f.x) < 20 && Math.abs(tf.y - f.y) < 20
+                );
+                if (!tooClose) {
+                    state.trackedFeatures.push({
+                        x: f.x,
+                        y: f.y,
+                        id: Math.random().toString(36).substr(2, 9),
+                        age: 0,
+                        trail: [{ x: f.x, y: f.y }]
+                    });
+                }
+            }
+        }
+
+        // Track features if we have a previous frame
+        if (state.prevGrayFull) {
+            const newTracked = [];
+
+            for (const feature of state.trackedFeatures) {
+                const result = trackFeature(state.prevGrayFull, gray, w, h,
+                    Math.round(feature.x), Math.round(feature.y));
+
+                if (result && result.x > 10 && result.x < w - 10 &&
+                    result.y > 10 && result.y < h - 10) {
+                    // Update feature position
+                    feature.x = result.x;
+                    feature.y = result.y;
+                    feature.dx = result.dx;
+                    feature.dy = result.dy;
+                    feature.age++;
+
+                    // Add to trail
+                    feature.trail.push({ x: result.x, y: result.y });
+                    if (feature.trail.length > state.trailLength) {
+                        feature.trail.shift();
+                    }
+
+                    // Keep feature if it's been tracked successfully
+                    if (feature.age < 200) {
+                        newTracked.push(feature);
+                    }
+                }
+            }
+
+            state.trackedFeatures = newTracked;
+
+            // Compute ego-motion from feature consensus
+            if (state.trackedFeatures.length > 5) {
+                const motions = state.trackedFeatures
+                    .filter(f => f.dx !== undefined)
+                    .map(f => ({ dx: f.dx, dy: f.dy }));
+
+                if (motions.length > 0) {
+                    // Median flow for ego-motion (robust to outliers)
+                    motions.sort((a, b) => a.dx - b.dx);
+                    const medianDx = motions[Math.floor(motions.length / 2)].dx;
+                    motions.sort((a, b) => a.dy - b.dy);
+                    const medianDy = motions[Math.floor(motions.length / 2)].dy;
+
+                    state.egoMotion.x = state.egoMotion.x * 0.7 + medianDx * 0.3;
+                    state.egoMotion.y = state.egoMotion.y * 0.7 + medianDy * 0.3;
+
+                    // Detect object motion (features moving differently from ego-motion)
+                    let objDx = 0, objDy = 0, objCount = 0;
+                    for (const f of state.trackedFeatures) {
+                        if (f.dx !== undefined) {
+                            const diffX = f.dx - state.egoMotion.x;
+                            const diffY = f.dy - state.egoMotion.y;
+                            if (Math.sqrt(diffX ** 2 + diffY ** 2) > 2) {
+                                objDx += diffX;
+                                objDy += diffY;
+                                objCount++;
+                            }
+                        }
+                    }
+                    if (objCount > 0) {
+                        state.objectMotion.x = objDx / objCount;
+                        state.objectMotion.y = objDy / objCount;
+                    }
+                }
+            }
+        }
+
+        state.prevGrayFull = gray;
+    }
+
+    // =========================================================================
+    // DATA LOGGING
+    // =========================================================================
+
+    function logDataPoint() {
+        if (!state.logging) return;
+
+        const now = Date.now();
+        const elapsed = (now - state.logStartTime) / 1000;
+        const euler = quat.toEuler(state.orientation);
+        const decomp = state.flowDecomposition;
+
+        state.dataLog.push({
+            time: elapsed.toFixed(3),
+            speed: state.speed.toFixed(4),
+            velocity_x: state.velocity.x.toFixed(4),
+            velocity_y: state.velocity.y.toFixed(4),
+            velocity_z: (state.velocity.z || 0).toFixed(4),
+            flow_x: state.flowMean.x.toFixed(2),
+            flow_y: state.flowMean.y.toFixed(2),
+            // Flow decomposition
+            translation_x: decomp.translation.x.toFixed(4),
+            translation_y: decomp.translation.y.toFixed(4),
+            rotation_rate: (decomp.rotation * 57.2958).toFixed(2), // deg/s
+            expansion: decomp.expansion.toFixed(4),
+            ttc: decomp.ttc < 100 ? decomp.ttc.toFixed(2) : 'inf',
+            // Ego motion
+            ego_x: state.egoMotion.x.toFixed(2),
+            ego_y: state.egoMotion.y.toFixed(2),
+            // Orientation
+            roll: euler.roll.toFixed(1),
+            pitch: euler.pitch.toFixed(1),
+            yaw: euler.yaw.toFixed(1),
+            // 24-cell
+            vertex: state.nearestVertex,
+            vertex_conf: state.vertexConfidence.toFixed(2),
+            // Linear acceleration (gravity compensated)
+            lin_accel_x: state.linearAccel.x.toFixed(3),
+            lin_accel_y: state.linearAccel.y.toFixed(3),
+            lin_accel_z: state.linearAccel.z.toFixed(3),
+            // Processing
+            motion_state: state.motionState,
+            scale: state.processScale.toFixed(2),
+            features: state.trackedFeatures.length,
+            fps: state.fps.toFixed(1)
+        });
+
+        // Limit log size
+        if (state.dataLog.length > 10000) {
+            state.dataLog.shift();
+        }
+    }
+
+    function exportData() {
+        if (state.dataLog.length === 0) {
+            alert('No data to export. Start logging first.');
+            return;
+        }
+
+        const headers = Object.keys(state.dataLog[0]);
+        const csv = [
+            headers.join(','),
+            ...state.dataLog.map(row => headers.map(h => row[h]).join(','))
+        ].join('\n');
+
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `kinetic-lens-${new Date().toISOString().slice(0, 19).replace(/[:-]/g, '')}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // =========================================================================
+    // MOIRÉ GENERATOR - Creates interference pattern for motion amplification
+    // =========================================================================
+
+    let moirePhaseAccum = 0;
+
+    // HSL to RGB conversion for color-coded moiré
+    function hslToRgb(h, s, l) {
+        h = h / 360;
+        let r, g, b;
+        if (s === 0) {
+            r = g = b = l;
+        } else {
+            const hue2rgb = (p, q, t) => {
+                if (t < 0) t += 1;
+                if (t > 1) t -= 1;
+                if (t < 1/6) return p + (q - p) * 6 * t;
+                if (t < 1/2) return q;
+                if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                return p;
+            };
+            const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            const p = 2 * l - q;
+            r = hue2rgb(p, q, h + 1/3);
+            g = hue2rgb(p, q, h);
+            b = hue2rgb(p, q, h - 1/3);
+        }
+        return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+    }
+
+    function drawMoire(width, height, rotation, flowMag) {
+        // Only resize if needed
+        if (moireCanvas.width !== width || moireCanvas.height !== height) {
+            moireCanvas.width = width;
+            moireCanvas.height = height;
+        }
+
+        // Accumulate phase based on motion - this creates the "beating" effect
+        moirePhaseAccum += flowMag * 0.05;
+
+        // Get optical rotation rate from flow decomposition
+        const opticalRotation = state.flowDecomposition.rotation || 0;
+
+        const img = moireCtx.createImageData(width, height);
+        const d = img.data;
+
+        // Reference grating - fixed orientation
+        const refFreq = 0.08;
+
+        // Measurement grating - rotates with camera/scene
+        // The angle difference creates moiré fringes that AMPLIFY small rotations
+        // 1° rotation → many fringe shifts (amplification factor = freq ratio)
+        const measFreq = 0.085;
+
+        // Combined rotation from IMU + optical flow
+        const imuRotation = rotation;
+        const combinedRotation = imuRotation + opticalRotation * 0.5;
+
+        const cos1 = Math.cos(0); // Reference: fixed
+        const sin1 = Math.sin(0);
+        const cos2 = Math.cos(combinedRotation);
+        const sin2 = Math.sin(combinedRotation);
+
+        const cx = width / 2;
+        const cy = height / 2;
+
+        // Log-polar center region for rotation-invariant matching
+        const logPolarRadius = Math.min(width, height) * 0.3;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const dx = x - cx;
+                const dy = y - cy;
+                const r = Math.sqrt(dx * dx + dy * dy);
+
+                let v;
+
+                if (r < logPolarRadius && r > 20) {
+                    // LOG-POLAR region: rotation becomes horizontal shift
+                    // This is the key insight - rotation is easier to measure as translation
+                    const theta = Math.atan2(dy, dx);
+                    const logR = Math.log(r + 1);
+
+                    // Reference grating in log-polar space
+                    const g1 = Math.sin(theta * 8 + moirePhaseAccum);
+
+                    // Measurement grating - shifted by rotation
+                    const g2 = Math.sin((theta + combinedRotation) * 8.5);
+
+                    // Interference shows rotation as fringe shifts
+                    const interference = (g1 * g2 + 1) * 0.5;
+                    v = interference > 0.5 ? 180 : 40;
+
+                    // Color code by angle for orientation reference
+                    const hue = ((theta + Math.PI) / (2 * Math.PI)) * 360;
+                    const rgb = hslToRgb(hue, 0.3, interference > 0.5 ? 0.6 : 0.2);
+
+                    const i = (y * width + x) * 4;
+                    d[i] = rgb[0];
+                    d[i + 1] = rgb[1];
+                    d[i + 2] = rgb[2];
+                    d[i + 3] = 200;
+                    continue;
+                } else {
+                    // Linear moiré in outer region
+                    // Grating 1 - reference (fixed)
+                    const xr1 = dx * cos1 - dy * sin1;
+                    const g1 = Math.sin(xr1 * refFreq);
+
+                    // Grating 2 - rotated with motion
+                    const xr2 = dx * cos2 - dy * sin2;
+                    const g2 = Math.sin(xr2 * measFreq + moirePhaseAccum * 0.5);
+
+                    // Interference
+                    const interference = (g1 * g2 + 1) * 0.5;
+                    v = interference > 0.5 ? 160 : 50;
+                }
+
+                const i = (y * width + x) * 4;
+                d[i] = v;
+                d[i + 1] = v;
+                d[i + 2] = v;
+                d[i + 3] = 255;
+            }
+        }
+
+        moireCtx.putImageData(img, 0, 0);
+    }
+
+    // =========================================================================
+    // DRAWING
+    // =========================================================================
+
+    function drawOverlay(width, height) {
+        ctx.clearRect(0, 0, width, height);
+        const cx = width / 2, cy = height / 2;
+
+        // Performance stats (always shown at top for debugging)
+        if (state.showPerfStats) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillRect(0, 0, width, 18);
+            ctx.fillStyle = '#00ffff';
+            ctx.font = '11px monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText(perf.getStats() + ` | ${state.minimalOverlay ? 'MINIMAL' : 'FULL'}`, 5, 13);
+        }
+
+        // In minimal mode, only draw essential info (skip flow field vectors)
+        if (state.minimalOverlay) {
+            // Just draw the main flow arrow and basic metrics
+            const fx = state.flowMean.x * 6;
+            const fy = state.flowMean.y * 6;
+            const mag = Math.sqrt(fx ** 2 + fy ** 2);
+
+            if (mag > 3) {
+                ctx.strokeStyle = '#00ff88';
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(cx + fx, cy + fy);
+                ctx.stroke();
+            }
+
+            // Minimal FPS display
+            ctx.fillStyle = 'rgba(0, 255, 136, 0.7)';
+            ctx.font = '12px monospace';
+            ctx.fillText(`${state.fps.toFixed(0)} FPS`, 10, 35);
+            return; // Skip detailed rendering
+        }
+
+        // Draw flow field vectors
+        const flowScale = 3;
+        for (const f of state.flowField) {
+            const mag = f.magnitude;
+            if (mag < 0.5) continue; // Skip static points
+
+            // Color based on quality and magnitude
+            const alpha = Math.min(0.9, f.quality * 0.7 + 0.2);
+            const hue = Math.max(0, 120 - mag * 8); // Green to red based on speed
+            ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${alpha})`;
+            ctx.lineWidth = Math.min(3, 1 + mag * 0.2);
+
+            const ex = f.x + f.dx * flowScale;
+            const ey = f.y + f.dy * flowScale;
+
+            ctx.beginPath();
+            ctx.moveTo(f.x, f.y);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+
+            // Small arrowhead
+            if (mag > 2) {
+                const angle = Math.atan2(f.dy, f.dx);
+                ctx.beginPath();
+                ctx.moveTo(ex, ey);
+                ctx.lineTo(ex - 5 * Math.cos(angle - 0.5), ey - 5 * Math.sin(angle - 0.5));
+                ctx.moveTo(ex, ey);
+                ctx.lineTo(ex - 5 * Math.cos(angle + 0.5), ey - 5 * Math.sin(angle + 0.5));
+                ctx.stroke();
+            }
+        }
+
+        // Draw average flow vector (large central arrow)
+        const fx = state.flowMean.x * 6;
+        const fy = state.flowMean.y * 6;
+        const mag = Math.sqrt(fx ** 2 + fy ** 2);
+
+        if (mag > 3) {
+            ctx.strokeStyle = '#00ff88';
+            ctx.lineWidth = 4;
+            ctx.lineCap = 'round';
+
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + fx, cy + fy);
+            ctx.stroke();
+
+            // Arrow head
+            const angle = Math.atan2(fy, fx);
+            ctx.beginPath();
+            ctx.moveTo(cx + fx, cy + fy);
+            ctx.lineTo(cx + fx - 15 * Math.cos(angle - 0.4), cy + fy - 15 * Math.sin(angle - 0.4));
+            ctx.moveTo(cx + fx, cy + fy);
+            ctx.lineTo(cx + fx - 15 * Math.cos(angle + 0.4), cy + fy - 15 * Math.sin(angle + 0.4));
+            ctx.stroke();
+        }
+
+        // Reference grid
+        ctx.strokeStyle = 'rgba(0, 255, 136, 0.15)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 8]);
+
+        // Horizontal lines
+        for (let y = height * 0.25; y < height; y += height * 0.25) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+        }
+        // Vertical lines
+        for (let x = width * 0.25; x < width; x += width * 0.25) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+        }
+        ctx.setLineDash([]);
+
+        // Center crosshair
+        ctx.strokeStyle = 'rgba(0, 255, 136, 0.5)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx - 30, cy); ctx.lineTo(cx - 10, cy);
+        ctx.moveTo(cx + 10, cy); ctx.lineTo(cx + 30, cy);
+        ctx.moveTo(cx, cy - 30); ctx.lineTo(cx, cy - 10);
+        ctx.moveTo(cx, cy + 10); ctx.lineTo(cx, cy + 30);
+        ctx.stroke();
+
+        // Center circle
+        ctx.beginPath();
+        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Draw motion trails for tracked features
+        for (const feature of state.trackedFeatures) {
+            if (feature.trail.length < 2) continue;
+
+            // Trail gradient - newer = brighter
+            const trail = feature.trail;
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            for (let i = 1; i < trail.length; i++) {
+                const alpha = (i / trail.length) * 0.8;
+                const isMovingDifferently = feature.dx !== undefined &&
+                    Math.sqrt((feature.dx - state.egoMotion.x) ** 2 + (feature.dy - state.egoMotion.y) ** 2) > 2;
+
+                // Cyan for ego-motion, magenta for independent object motion
+                ctx.strokeStyle = isMovingDifferently
+                    ? `rgba(255, 0, 255, ${alpha})`
+                    : `rgba(0, 200, 255, ${alpha})`;
+
+                ctx.beginPath();
+                ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+                ctx.lineTo(trail[i].x, trail[i].y);
+                ctx.stroke();
+            }
+
+            // Feature point marker
+            const last = trail[trail.length - 1];
+            ctx.fillStyle = '#00ffff';
+            ctx.beginPath();
+            ctx.arc(last.x, last.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Ego-motion indicator (camera motion)
+        if (Math.abs(state.egoMotion.x) > 0.5 || Math.abs(state.egoMotion.y) > 0.5) {
+            const egoScale = 10;
+            ctx.strokeStyle = 'rgba(0, 200, 255, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + state.egoMotion.x * egoScale, cy + state.egoMotion.y * egoScale);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Label
+            ctx.fillStyle = 'rgba(0, 200, 255, 0.8)';
+            ctx.font = '10px monospace';
+            ctx.fillText('EGO', cx + state.egoMotion.x * egoScale + 5, cy + state.egoMotion.y * egoScale);
+        }
+
+        // FPS display
+        ctx.fillStyle = 'rgba(0, 255, 136, 0.7)';
+        ctx.font = '12px monospace';
+        ctx.fillText(`${state.fps.toFixed(0)} FPS`, 10, 20);
+        ctx.fillText(`Flow: ${state.flowField.filter(f => f.magnitude > 0.5).length}/${state.flowField.length}`, 10, 35);
+        ctx.fillText(`Features: ${state.trackedFeatures.length}`, 10, 50);
+
+        // Motion state indicator
+        ctx.fillStyle = state.motionState === 'FAST' ? '#ff4444' :
+                        state.motionState === 'MOVING' ? '#ffaa00' : '#00ff88';
+        ctx.fillText(`${state.motionState}`, 10, 65);
+
+        // Processing scale indicator
+        ctx.fillStyle = 'rgba(0, 255, 136, 0.5)';
+        ctx.fillText(`Scale: ${(state.processScale * 100).toFixed(0)}%`, 10, 80);
+
+        // Calibration quality indicator
+        const calibQuality = Math.min(100, state.calibrationSamples.length * 5);
+        ctx.fillStyle = calibQuality > 50 ? '#00ff88' : calibQuality > 20 ? '#ffaa00' : '#ff4444';
+        ctx.fillText(`Calib: ${calibQuality}%`, 10, 95);
+
+        // === OBJECT MOTION DETECTION ===
+        // Cluster flow points that differ from ego-motion into discrete objects
+        const egoMag = Math.sqrt(state.egoMotion.x**2 + state.egoMotion.y**2);
+        const sceneDistance = parseFloat($('distanceInput').value) || 2.0;
+        const dt = state.frameTime || (1/30);
+        const calibQualityPct = Math.min(100, state.calibrationSamples.length * 5);
+
+        // Stricter thresholds to reduce noise
+        const MIN_DIFF_MAG = 4;           // Minimum difference from ego-motion (was 2)
+        const MIN_QUALITY = 0.5;          // Minimum flow quality (was 0.4)
+        const CLUSTER_RADIUS = 60;        // Pixels - merge nearby detections
+        const MAX_OBJECTS = 5;            // Limit objects to track
+
+        // First pass: collect candidate points
+        const candidates = [];
+        for (const f of state.flowField) {
+            if (f.quality < MIN_QUALITY) continue;
+
+            const diffX = f.dx - state.egoMotion.x;
+            const diffY = f.dy - state.egoMotion.y;
+            const diffMag = Math.sqrt(diffX**2 + diffY**2);
+
+            // Must be significantly different from ego-motion
+            if (diffMag > MIN_DIFF_MAG && (egoMag < 1 || diffMag > egoMag * 0.7)) {
+                candidates.push({ x: f.x, y: f.y, diffX, diffY, diffMag });
+            }
+        }
+
+        // Second pass: cluster nearby candidates into objects
+        const objects = [];
+        for (const c of candidates) {
+            // Check if this belongs to an existing cluster
+            let merged = false;
+            for (const obj of objects) {
+                const dist = Math.sqrt((c.x - obj.x)**2 + (c.y - obj.y)**2);
+                if (dist < CLUSTER_RADIUS) {
+                    // Merge into existing object (weighted average)
+                    const n = obj.count;
+                    obj.x = (obj.x * n + c.x) / (n + 1);
+                    obj.y = (obj.y * n + c.y) / (n + 1);
+                    obj.diffX = (obj.diffX * n + c.diffX) / (n + 1);
+                    obj.diffY = (obj.diffY * n + c.diffY) / (n + 1);
+                    obj.diffMag = Math.max(obj.diffMag, c.diffMag);
+                    obj.count++;
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged && objects.length < MAX_OBJECTS) {
+                objects.push({ ...c, count: 1 });
+            }
+        }
+
+        // Filter: only keep clusters with multiple points (reduces noise)
+        const confirmedObjects = objects.filter(o => o.count >= 3);
+
+        // Calculate max speed and draw confirmed objects
+        let maxObjSpeed = 0;
+        for (const obj of confirmedObjects) {
+            const objSpeedPxPerSec = obj.diffMag / dt;
+            const objSpeedMPerSec = objSpeedPxPerSec * sceneDistance / state.focalLength;
+            maxObjSpeed = Math.max(maxObjSpeed, objSpeedMPerSec);
+
+            // Draw object marker - size based on cluster size and speed
+            const radius = Math.min(30, 10 + obj.count * 2 + objSpeedMPerSec * 2);
+            const hue = Math.max(0, 120 - objSpeedMPerSec * 15);
+
+            ctx.fillStyle = `hsla(${hue}, 100%, 50%, 0.4)`;
+            ctx.beginPath();
+            ctx.arc(obj.x, obj.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Object velocity vector
+            ctx.strokeStyle = `hsla(${hue}, 100%, 70%, 0.9)`;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(obj.x, obj.y);
+            ctx.lineTo(obj.x + obj.diffX * 5, obj.y + obj.diffY * 5);
+            ctx.stroke();
+
+            // Speed label
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${objSpeedMPerSec.toFixed(1)}m/s`, obj.x, obj.y - radius - 5);
+        }
+
+        // Store object detection results for UI
+        const egoSpeed = egoMag / dt * sceneDistance / state.focalLength;
+        state.sceneMetrics = {
+            egoSpeed: egoSpeed,
+            objectCount: confirmedObjects.length,
+            maxObjectSpeed: maxObjSpeed,
+            calibQuality: calibQualityPct
+        };
+
+        // === CALIBRATED MEASUREMENTS PANEL ===
+        // Shows what we can measure using sensor-calibrated optical flow
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(width - 160, height - 100, 155, 95);
+
+        ctx.fillStyle = '#00ff88';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(`Camera: ${egoSpeed.toFixed(2)} m/s`, width - 10, height - 82);
+
+        // Detected objects in scene (motion that differs from ego)
+        ctx.fillStyle = objectCount > 0 ? '#ffaa00' : '#666';
+        ctx.fillText(`Objects: ${objectCount}`, width - 10, height - 68);
+        ctx.fillText(`Max spd: ${maxObjSpeed.toFixed(2)} m/s`, width - 10, height - 54);
+
+        // Calibration reference info
+        ctx.fillStyle = '#888';
+        ctx.fillText(`Distance: ${sceneDistance.toFixed(1)} m`, width - 10, height - 36);
+        ctx.fillText(`Focal: ${state.focalLength.toFixed(0)} px`, width - 10, height - 22);
+        ctx.fillText(`Calib: ${calibQuality}%`, width - 10, height - 8);
+
+        ctx.textAlign = 'left';
+
+        // Logging indicator
+        if (state.logging) {
+            ctx.fillStyle = '#ff4444';
+            ctx.beginPath();
+            ctx.arc(width - 20, 20, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '10px monospace';
+            ctx.fillText('REC', width - 45, 24);
+        }
+    }
+
+    function drawCompass() {
+        const w = compass.width, h = compass.height;
+        const cx = w / 2, cy = h / 2, r = 40;
+
+        compassCtx.clearRect(0, 0, w, h);
+
+        // Outer ring
+        compassCtx.strokeStyle = 'rgba(0, 255, 136, 0.3)';
+        compassCtx.lineWidth = 2;
+        compassCtx.beginPath();
+        compassCtx.arc(cx, cy, r, 0, Math.PI * 2);
+        compassCtx.stroke();
+
+        // Tick marks
+        for (let i = 0; i < 8; i++) {
+            const angle = (i * Math.PI) / 4;
+            const inner = i % 2 === 0 ? r - 8 : r - 5;
+            compassCtx.beginPath();
+            compassCtx.moveTo(cx + inner * Math.cos(angle), cy + inner * Math.sin(angle));
+            compassCtx.lineTo(cx + r * Math.cos(angle), cy + r * Math.sin(angle));
+            compassCtx.stroke();
+        }
+
+        // Flow direction - points where camera is moving
+        const flowMag = state.flowMagnitude;
+        const flowDir = Math.atan2(state.flowMean.y, state.flowMean.x);
+
+        if (flowMag > 0.5) {
+            const arrowLen = Math.min(r * 0.8, r * 0.3 + flowMag * 2);
+            const alpha = Math.min(1, flowMag / 5);
+
+            // Arrow shaft
+            compassCtx.strokeStyle = `rgba(0, 255, 136, ${alpha})`;
+            compassCtx.lineWidth = 3;
+            compassCtx.lineCap = 'round';
+            compassCtx.beginPath();
+            compassCtx.moveTo(cx, cy);
+            compassCtx.lineTo(cx + arrowLen * Math.cos(flowDir), cy + arrowLen * Math.sin(flowDir));
+            compassCtx.stroke();
+
+            // Arrow head
+            const tipX = cx + arrowLen * Math.cos(flowDir);
+            const tipY = cy + arrowLen * Math.sin(flowDir);
+            compassCtx.beginPath();
+            compassCtx.moveTo(tipX, tipY);
+            compassCtx.lineTo(tipX - 8 * Math.cos(flowDir - 0.5), tipY - 8 * Math.sin(flowDir - 0.5));
+            compassCtx.moveTo(tipX, tipY);
+            compassCtx.lineTo(tipX - 8 * Math.cos(flowDir + 0.5), tipY - 8 * Math.sin(flowDir + 0.5));
+            compassCtx.stroke();
+        }
+
+        // Center dot
+        compassCtx.fillStyle = 'rgba(0, 255, 136, 0.5)';
+        compassCtx.beginPath();
+        compassCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+        compassCtx.fill();
+
+        // Speed label
+        compassCtx.fillStyle = '#00ff88';
+        compassCtx.font = 'bold 10px sans-serif';
+        compassCtx.textAlign = 'center';
+        compassCtx.fillText(state.speed.toFixed(1), cx, cy + r + 12);
+    }
+
+    function drawGraph() {
+        const w = graph.width, h = graph.height;
+
+        // Background
+        graphCtx.fillStyle = '#1a1a24';
+        graphCtx.fillRect(0, 0, w, h);
+
+        // Grid lines
+        graphCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        graphCtx.lineWidth = 1;
+        for (let y = h * 0.25; y < h; y += h * 0.25) {
+            graphCtx.beginPath();
+            graphCtx.moveTo(0, y);
+            graphCtx.lineTo(w, y);
+            graphCtx.stroke();
+        }
+
+        const max = Math.max(0.5, ...state.speedHistory);
+        const step = w / state.speedHistory.length;
+
+        // Gradient fill under curve
+        const gradient = graphCtx.createLinearGradient(0, 0, 0, h);
+        gradient.addColorStop(0, 'rgba(0, 255, 136, 0.3)');
+        gradient.addColorStop(1, 'rgba(0, 255, 136, 0.0)');
+
+        graphCtx.fillStyle = gradient;
+        graphCtx.beginPath();
+        graphCtx.moveTo(0, h);
+
+        for (let i = 0; i < state.speedHistory.length; i++) {
+            const x = i * step;
+            const y = h - (state.speedHistory[i] / max) * (h - 15) - 5;
+            graphCtx.lineTo(x, y);
+        }
+        graphCtx.lineTo(w, h);
+        graphCtx.closePath();
+        graphCtx.fill();
+
+        // Line
+        graphCtx.strokeStyle = '#00ff88';
+        graphCtx.lineWidth = 2;
+        graphCtx.lineJoin = 'round';
+        graphCtx.beginPath();
+
+        for (let i = 0; i < state.speedHistory.length; i++) {
+            const x = i * step;
+            const y = h - (state.speedHistory[i] / max) * (h - 15) - 5;
+            if (i === 0) graphCtx.moveTo(x, y);
+            else graphCtx.lineTo(x, y);
+        }
+        graphCtx.stroke();
+
+        // Current point
+        const lastY = h - (state.speed / max) * (h - 15) - 5;
+        graphCtx.fillStyle = '#00ff88';
+        graphCtx.beginPath();
+        graphCtx.arc(w - step, lastY, 4, 0, Math.PI * 2);
+        graphCtx.fill();
+
+        // Labels
+        graphCtx.font = '10px monospace';
+        graphCtx.fillStyle = '#00ff88';
+        graphCtx.fillText(`${state.speed.toFixed(2)} m/s`, 5, 12);
+
+        graphCtx.fillStyle = '#666';
+        graphCtx.textAlign = 'right';
+        graphCtx.fillText(`max: ${max.toFixed(1)}`, w - 5, 12);
+        graphCtx.textAlign = 'left';
+    }
+
+    // =========================================================================
+    // UPDATE
+    // =========================================================================
+
+    function updateUI() {
+        // HUD - show both raw and smoothed
+        const displaySpeed = state.speed;
+        $('speedDisplay').textContent = displaySpeed.toFixed(1);
+        $('speedKmh').textContent = (displaySpeed * 3.6).toFixed(1);
+
+        const euler = quat.toEuler(state.quantizedOrientation);
+        $('rollDisplay').textContent = euler.roll.toFixed(0) + '°';
+        $('pitchDisplay').textContent = euler.pitch.toFixed(0) + '°';
+        $('yawDisplay').textContent = euler.yaw.toFixed(0) + '°';
+        $('vertexLabel').textContent = VERTEX_LABELS[state.nearestVertex];
+
+        // Sidebar - Motion
+        $('metricSpeed').innerHTML = displaySpeed.toFixed(2) + '<span class="metric-unit">m/s</span>';
+
+        const dir = Math.atan2(state.velocity.y, state.velocity.x) * 57.2958;
+        $('metricDirection').innerHTML = dir.toFixed(0) + '<span class="metric-unit">°</span>';
+
+        // Show flow in pixels/second (more meaningful than raw)
+        const flowPPS_X = state.frameTime > 0 ? (state.flowMean.x / state.frameTime) : 0;
+        const flowPPS_Y = state.frameTime > 0 ? (state.flowMean.y / state.frameTime) : 0;
+        $('metricFlowX').innerHTML = flowPPS_X.toFixed(0) + '<span class="metric-unit">px/s</span>';
+        $('metricFlowY').innerHTML = flowPPS_Y.toFixed(0) + '<span class="metric-unit">px/s</span>';
+
+        // Rotation - angular velocity
+        const omega = Math.sqrt(state.gyro.x ** 2 + state.gyro.y ** 2 + state.gyro.z ** 2) * 57.2958;
+        $('metricOmega').innerHTML = omega.toFixed(1) + '<span class="metric-unit">°/s</span>';
+
+        // Stability based on both rotation rate and flow consistency
+        const flowStd = state.flowField.length > 0
+            ? Math.sqrt(state.flowField.reduce((s, f) => s + (f.magnitude - state.flowMagnitude) ** 2, 0) / state.flowField.length)
+            : 0;
+        const stability = Math.max(0, Math.min(100, 100 - omega * 3 - flowStd * 2));
+        $('metricStability').innerHTML = stability.toFixed(0) + '<span class="metric-unit">%</span>';
+        const stabBar = $('stabilityBar');
+        stabBar.style.width = stability + '%';
+        stabBar.className = 'progress-fill' + (stability < 30 ? ' error' : stability < 60 ? ' warning' : '');
+
+        // 24-cell
+        $('vertexName').textContent = VERTEX_LABELS[state.nearestVertex];
+        $('vertexIndex').textContent = state.nearestVertex;
+        document.querySelectorAll('.cell').forEach((c, i) => c.classList.toggle('active', i === state.nearestVertex));
+
+        // Confidence based on data quality
+        const activeFlows = state.flowField.filter(f => f.magnitude > 0.5 && f.quality > 0.4).length;
+        const flowConf = Math.min(40, (activeFlows / Math.max(1, state.flowField.length)) * 60);
+        const sensorConf = state.sensors ? 30 : 0;
+        const cameraConf = state.camera ? 30 : 0;
+        const conf = Math.min(100, flowConf + sensorConf + cameraConf);
+
+        $('metricConfidence').textContent = conf.toFixed(0) + '%';
+        const confBar = $('confidenceBar');
+        confBar.style.width = conf + '%';
+        confBar.className = 'progress-fill' + (conf < 30 ? ' error' : conf < 60 ? ' warning' : '');
+
+        // Scene Measurement metrics
+        const metrics = state.sceneMetrics || { egoSpeed: 0, objectCount: 0, maxObjectSpeed: 0, calibQuality: 0 };
+
+        // Camera ego-speed (how fast the phone/camera is moving)
+        $('metricEgoSpeed').innerHTML = metrics.egoSpeed.toFixed(2) + '<span class="metric-unit">m/s</span>';
+
+        // Number of detected moving objects in scene
+        const objCountEl = $('metricObjectCount');
+        objCountEl.textContent = metrics.objectCount;
+        objCountEl.style.color = metrics.objectCount > 0 ? 'var(--warning)' : 'var(--text-dim)';
+
+        // Maximum object speed detected
+        const objSpeedEl = $('metricObjectSpeed');
+        objSpeedEl.innerHTML = metrics.maxObjectSpeed.toFixed(2) + '<span class="metric-unit">m/s</span>';
+        objSpeedEl.style.color = metrics.maxObjectSpeed > 1 ? 'var(--error)' :
+                                  metrics.maxObjectSpeed > 0.3 ? 'var(--warning)' : 'var(--accent)';
+
+        // Calibration quality percentage
+        const calibQualityEl = $('metricCalibQuality');
+        calibQualityEl.innerHTML = metrics.calibQuality.toFixed(0) + '<span class="metric-unit">%</span>';
+        calibQualityEl.style.color = metrics.calibQuality > 50 ? 'var(--accent)' :
+                                     metrics.calibQuality > 20 ? 'var(--warning)' : 'var(--error)';
+
+        // Update Kalman status
+        const kalmanActive = kalman.P_orient < 0.5; // Converged
+        const kalmanEl = $('kalmanStatus');
+        if (kalmanActive) {
+            kalmanEl.classList.add('active');
+            kalmanEl.classList.remove('pending');
+        } else if (state.sensors) {
+            kalmanEl.classList.add('pending');
+            kalmanEl.classList.remove('active');
+        } else {
+            kalmanEl.classList.remove('active', 'pending');
+        }
+
+        // Update calibration status
+        const calibActive = state.calibrationSamples.length >= 20;
+        const calibEl = $('calibStatus');
+        if (calibActive) {
+            calibEl.classList.add('active');
+            calibEl.classList.remove('pending');
+        } else if (state.calibrationSamples.length > 0) {
+            calibEl.classList.add('pending');
+            calibEl.classList.remove('active');
+        } else {
+            calibEl.classList.remove('active', 'pending');
+        }
+
+        drawCompass();
+        drawGraph();
+    }
+
+    // =========================================================================
+    // MAIN LOOP
+    // =========================================================================
+
+    function loop(timestamp) {
+        if (!state.running) return;
+
+        perf.startFrame();
+
+        // Frame timing
+        const dt = state.lastTime ? (timestamp - state.lastTime) / 1000 : 0;
+        state.lastTime = timestamp;
+        state.frameTime = dt;
+        state.fps = dt > 0 ? (state.fps * 0.9 + (1 / dt) * 0.1) : state.fps;
+
+        // IMU integration (dual: simple + Kalman)
+        if (state.sensors && dt > 0 && dt < 0.2) {
+            // Simple complementary filter (fast, for display)
+            imu.update(state.gyro, state.accel, dt);
+
+            // Use Kalman filter orientation (more accurate)
+            state.orientation = kalman.getOrientation();
+
+            // Gravity compensation for accelerometer
+            updateGravityCompensation();
+        }
+
+        // 24-cell quantization with hysteresis filtering
+        const prevVertex = state.nearestVertex;
+        latticeFilter.update(state.orientation);
+
+        // Track vertex transitions for motion classification
+        if (state.nearestVertex !== prevVertex) {
+            const transition = motionClassifier.onTransition(prevVertex, state.nearestVertex);
+            state.lastTransition = transition;
+            state.motionType = motionClassifier.getRecentMotionType();
+        }
+
+        // Adaptive resolution based on motion
+        updateAdaptiveScale();
+
+        // Smart polling - skip frames when stationary to save battery
+        const shouldProcessFlow = smartPolling.shouldProcess();
+
+        // Optical flow (only if smart polling allows)
+        if (state.camera && video.readyState >= 2 && shouldProcessFlow) {
+            const w = video.videoWidth, h = video.videoHeight;
+
+            // Update focal length estimate based on video size
+            state.focalLength = Math.max(w, h) * 0.8; // Approximate for typical phone camera
+
+            overlay.width = w;
+            overlay.height = h;
+
+            // Capture frame
+            ctx.drawImage(video, 0, 0, w, h);
+            const imgData = ctx.getImageData(0, 0, w, h);
+
+            // Compute flow (timed)
+            perf.startFlow();
+            const flow = computeFlow(imgData);
+            perf.endFlow();
+
+            if (flow && dt > 0) {
+                // Less aggressive smoothing for responsiveness
+                const smooth = 0.5;
+                state.flowMean.x = state.flowMean.x * smooth + flow.x * (1 - smooth);
+                state.flowMean.y = state.flowMean.y * smooth + flow.y * (1 - smooth);
+                state.flowMagnitude = Math.sqrt(state.flowMean.x ** 2 + state.flowMean.y ** 2);
+
+                // Update flow status based on quality
+                const flowStatus = $('flowStatus');
+                if (flow.count > 5) {
+                    flowStatus.classList.add('active');
+                    flowStatus.classList.remove('pending');
+                } else if (flow.count > 0) {
+                    flowStatus.classList.add('pending');
+                    flowStatus.classList.remove('active');
+                } else {
+                    flowStatus.classList.remove('active', 'pending');
+                }
+
+                // ======= PHYSICS CALCULATION =======
+                // Convert optical flow (pixels/frame) to velocity (m/s)
+                //
+                // Formula: velocity = (flow_pixels / dt) * (distance / focal_length)
+                //
+                // - flow_pixels: displacement in image plane (pixels)
+                // - dt: time between frames (seconds)
+                // - distance: scene distance (meters)
+                // - focal_length: camera focal length (pixels)
+                //
+                // This gives: v = (pixels/second) * (meters/pixel at distance d)
+
+                const sceneDistance = parseFloat($('distanceInput').value) || 2.0;
+
+                // Raw velocity from flow (pixels/second -> m/s)
+                const pixelsPerSecondX = state.flowMean.x / dt;
+                const pixelsPerSecondY = state.flowMean.y / dt;
+
+                // Convert to world velocity using pinhole camera model
+                // At distance d, 1 pixel corresponds to d/f meters
+                const metersPerPixel = sceneDistance / state.focalLength;
+
+                const rawVelX = pixelsPerSecondX * metersPerPixel;
+                const rawVelY = pixelsPerSecondY * metersPerPixel;
+
+                // Smooth the velocity
+                state.velocity.x = state.velocity.x * 0.7 + rawVelX * 0.3;
+                state.velocity.y = state.velocity.y * 0.7 + rawVelY * 0.3;
+
+                // Speed
+                state.rawSpeed = Math.sqrt(rawVelX ** 2 + rawVelY ** 2);
+                state.speed = Math.sqrt(state.velocity.x ** 2 + state.velocity.y ** 2);
+
+                // Cap unrealistic values (sensor noise)
+                if (state.speed > 100) {
+                    state.speed = 0;
+                    state.rawSpeed = 0;
+                }
+
+                state.speedHistory.push(state.speed);
+                state.speedHistory.shift();
+
+                // Flow field decomposition
+                const cx = w / 2, cy = h / 2;
+                decomposeFlowField(state.flowField, cx, cy, state.focalLength);
+
+                // Multi-rate fusion: correlate camera with buffered IMU
+                const fusionResult = multiRate.onCamera(state.flowDecomposition, performance.now());
+                state.predictedRotation = fusionResult.predicted;
+                state.residualRotation = fusionResult.residual;
+
+                // Add forward velocity from expansion (time-to-collision)
+                if (state.flowDecomposition.expansion > 0.01) {
+                    // Approaching: positive forward velocity
+                    state.velocity.z = sceneDistance * state.flowDecomposition.expansion;
+                } else {
+                    state.velocity.z = state.velocity.z * 0.9; // Decay
+                }
+
+                // Auto-calibration using accelerometer
+                updateAutoCalibration();
+            }
+
+            // Feature tracking (runs every few frames for performance)
+            if (state.frameCount === undefined) state.frameCount = 0;
+            state.frameCount++;
+            if (state.frameCount % 3 === 0) {  // Every 3rd frame
+                updateFeatureTracking(imgData);
+            }
+
+            // Draw overlay (timed)
+            perf.startDraw();
+            drawOverlay(w, h);
+            perf.endDraw();
+
+            // Moiré visualization - now uses rotation from flow decomposition
+            if (state.moireEnabled) {
+                const euler = quat.toEuler(state.quantizedOrientation);
+                // Use both orientation yaw and optical rotation for moiré phase
+                const combinedRotation = euler.yaw * 0.0174533 + state.flowDecomposition.rotation * 0.1;
+                drawMoire(w, h, combinedRotation, state.flowMagnitude * 0.5);
+                moireCanvas.classList.add('active');
+            } else {
+                moireCanvas.classList.remove('active');
+            }
+
+            // Data logging
+            logDataPoint();
+        }
+
+        // Update UI (timed)
+        perf.startUI();
+        updateUI();
+        perf.endUI();
+
+        perf.endFrame();
+        requestAnimationFrame(loop);
+    }
+
+    // =========================================================================
+    // CAMERA
+    // =========================================================================
+
+    async function startCamera() {
+        if (!navigator.mediaDevices?.getUserMedia) {
+            showError('Camera Not Available', 'Camera API requires HTTPS. Please access this page via https:// or localhost.');
+            return;
+        }
+
+        $('cameraStatus').classList.add('pending');
+
+        try {
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+                });
+            } catch {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 1280 }, height: { ideal: 720 } }
+                });
+            }
+
+            video.srcObject = stream;
+            await new Promise((res, rej) => {
+                video.onloadedmetadata = () => video.play().then(res).catch(rej);
+                setTimeout(() => rej(new Error('Timeout')), 10000);
+            });
+
+            state.camera = true;
+            $('cameraStatus').classList.remove('pending');
+            $('cameraStatus').classList.add('active');
+            $('placeholder').style.display = 'none';
+
+            // Show HUDs
+            $('hudSpeed').style.display = 'block';
+            $('hudOrientation').style.display = 'block';
+            $('hudVertex').style.display = 'block';
+            compass.style.display = 'block';
+
+        } catch (err) {
+            $('cameraStatus').classList.remove('pending');
+            let msg = err.message;
+            if (err.name === 'NotAllowedError') msg = 'Camera permission denied. Please allow camera access and reload.';
+            else if (err.name === 'NotFoundError') msg = 'No camera found on this device.';
+            else if (location.protocol !== 'https:' && location.hostname !== 'localhost')
+                msg = 'Camera requires HTTPS. Current protocol: ' + location.protocol;
+            showError('Camera Error', msg);
+        }
+    }
+
+    function stopCamera() {
+        video.srcObject?.getTracks().forEach(t => t.stop());
+        state.camera = false;
+        $('cameraStatus').classList.remove('active');
+    }
+
+    // =========================================================================
+    // SENSORS
+    // =========================================================================
+
+    async function requestSensors() {
+        const request = async (EventType) => {
+            if (typeof EventType?.requestPermission === 'function') {
+                return await EventType.requestPermission() === 'granted';
+            }
+            return true;
+        };
+
+        try {
+            await request(DeviceOrientationEvent);
+            await request(DeviceMotionEvent);
+        } catch {}
+
+        window.addEventListener('devicemotion', e => {
+            if (e.rotationRate) {
+                state.gyro = {
+                    x: (e.rotationRate.beta || 0) * 0.0174533,
+                    y: (e.rotationRate.gamma || 0) * 0.0174533,
+                    z: (e.rotationRate.alpha || 0) * 0.0174533
+                };
+            }
+            if (e.accelerationIncludingGravity) {
+                state.accel = {
+                    x: e.accelerationIncludingGravity.x || 0,
+                    y: e.accelerationIncludingGravity.y || 0,
+                    z: e.accelerationIncludingGravity.z || 0
+                };
+            }
+
+            // Feed into multi-rate fusion system
+            if (state.running) {
+                multiRate.onIMU(state.gyro, state.accel, performance.now());
+            }
+
+            if (!state.sensors) {
+                state.sensors = true;
+                $('imuStatus').classList.add('active');
+            }
+        });
+    }
+
+    // =========================================================================
+    // UI
+    // =========================================================================
+
+    function showError(title, text) {
+        $('errorTitle').textContent = title;
+        $('errorText').textContent = text;
+        $('errorModal').classList.add('show');
+    }
+
+    $('startBtn').addEventListener('click', async () => {
+        if (!state.running) {
+            // Initialize audio on user interaction (required by browsers)
+            audioFeedback.init();
+
+            await startCamera();
+            state.running = true;
+            state.lastTime = 0;
+            smartPolling.reset();
+            $('startBtn').innerHTML = '<span class="btn-icon">⏹</span><span>Stop</span>';
+            $('startBtn').classList.add('active');
+            requestAnimationFrame(loop);
+        } else {
+            state.running = false;
+            stopCamera();
+            $('startBtn').innerHTML = '<span class="btn-icon">▶</span><span>Start</span>';
+            $('startBtn').classList.remove('active');
+        }
+    });
+
+    $('sensorBtn').addEventListener('click', requestSensors);
+
+    $('resetBtn').addEventListener('click', () => {
+        imu.reset();
+        state.prevGray = null;
+        state.prevGrayFull = null;
+        state.flowField = [];
+        state.flowMean = { x: 0, y: 0 };
+        state.flowMagnitude = 0;
+        state.velocity = { x: 0, y: 0, z: 0 };
+        state.speed = 0;
+        state.rawSpeed = 0;
+        state.speedHistory.fill(0);
+        state.orientation = [1, 0, 0, 0];
+        state.quantizedOrientation = [1, 0, 0, 0];
+        state.nearestVertex = 0;
+        state.vertexConfidence = 1.0;
+        state.lastVertex = 0;
+        state.vertexStableFrames = 0;
+        moirePhaseAccum = 0;
+
+        // Reset feature tracking
+        state.features = [];
+        state.trackedFeatures = [];
+        state.motionTrails = [];
+        state.egoMotion = { x: 0, y: 0, rotation: 0 };
+        state.objectMotion = { x: 0, y: 0 };
+
+        // Reset flow decomposition
+        state.flowDecomposition = {
+            translation: { x: 0, y: 0 },
+            rotation: 0,
+            expansion: 0,
+            ttc: Infinity
+        };
+
+        // Reset Kalman filter and multi-rate fusion
+        kalman.reset();
+        multiRate.reset();
+        motionClassifier.reset();
+
+        // Reset calibration
+        state.calibrationSamples = [];
+        state.accelVelocity = { x: 0, y: 0, z: 0 };
+        state.linearAccel = { x: 0, y: 0, z: 0 };
+
+        // Reset motion state
+        state.motionState = 'STATIONARY';
+        state.motionType = null;
+
+        // Reset smart polling
+        smartPolling.reset();
+
+        // Reset status indicators
+        $('flowStatus').classList.remove('active', 'pending');
+        $('kalmanStatus').classList.remove('active', 'pending');
+        $('calibStatus').classList.remove('active', 'pending');
+    });
+
+    $('moireToggle').addEventListener('click', e => {
+        if (e.target.classList.contains('toggle-btn')) {
+            $('moireToggle').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+            e.target.classList.add('active');
+            state.moireEnabled = e.target.dataset.value === 'on';
+        }
+    });
+
+    $('overlayToggle').addEventListener('click', e => {
+        if (e.target.classList.contains('toggle-btn')) {
+            $('overlayToggle').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+            e.target.classList.add('active');
+            state.minimalOverlay = e.target.dataset.value === 'min';
+        }
+    });
+
+    // Keyboard shortcuts for debugging
+    document.addEventListener('keydown', e => {
+        if (e.key === 'm' || e.key === 'M') {
+            // Toggle minimal overlay
+            state.minimalOverlay = !state.minimalOverlay;
+            $('overlayToggle').querySelectorAll('.toggle-btn').forEach(b => {
+                b.classList.toggle('active',
+                    (state.minimalOverlay && b.dataset.value === 'min') ||
+                    (!state.minimalOverlay && b.dataset.value === 'full'));
+            });
+        } else if (e.key === 'p' || e.key === 'P') {
+            // Toggle perf stats
+            state.showPerfStats = !state.showPerfStats;
+        }
+    });
+
+    $('logBtn').addEventListener('click', () => {
+        state.logging = !state.logging;
+        const btn = $('logBtn');
+        if (state.logging) {
+            state.logStartTime = Date.now();
+            state.dataLog = [];
+            btn.classList.add('active');
+            btn.querySelector('span:last-child').textContent = 'Stop';
+        } else {
+            btn.classList.remove('active');
+            btn.querySelector('span:last-child').textContent = 'Log';
+        }
+    });
+
+    $('exportBtn').addEventListener('click', exportData);
+
+    // Auto-enable sensors on desktop
+    if (!/iPhone|iPad|Android/i.test(navigator.userAgent)) {
+        requestSensors();
+    }
+    </script>
+</body>
+</html>

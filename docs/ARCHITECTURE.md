@@ -57,3 +57,92 @@ export enum AppState {
 }
 ```
 Transitions are linear and guarded. For example, you cannot enter `CAPTURING` without a valid `CalibrationData` object.
+
+---
+
+## 5. Advanced Modules (Evolution Track 3)
+
+### 5.1 Geometric Algebra Engine (`GeometricAlgebra.ts`)
+Implements Clifford Algebra Cl(3,0) for rotation representation.
+- **Rotors**: Replace quaternions with geometrically-meaningful objects
+- **Spinors**: Quantum state representation for Phillips Gate
+- **4D Bi-Rotors**: Double isoclinic rotations for 4D polytope manipulation
+
+See: [GEOMETRIC_ALGEBRA_PRIMER.md](./GEOMETRIC_ALGEBRA_PRIMER.md)
+
+### 5.2 E8 Projection Engine (`E8Projection.ts`)
+High-dimensional geometry for visual computation.
+- **24-Cell**: Substrate for quantum register (Binary Tetrahedral Group)
+- **600-Cell**: Extended substrate for cellular automaton
+- **Hopf Fibration**: Quaternion visualization via S³ → S² projection
+- **Quasicrystals**: Penrose/Ammann-Beenker tilings from cut-and-project
+
+### 5.3 Moiré Visual Computing (`MoireEngine.ts`)
+Replaces textual readouts with geometric patterns.
+- **Gratings**: Linear, circular, log-polar, hyperbolic patterns
+- **Nomograms**: Visual analog calculators (Time × Distance = Speed)
+- **Fringe Analysis**: Mechanical amplification via beat frequency
+
+See: [MOIRE_VISUAL_COMPUTING.md](./MOIRE_VISUAL_COMPUTING.md)
+
+### 5.4 Phillips Gate Simulator (`PhillipsGateSimulator.ts`)
+Quantum computing simulation on polytope substrate.
+- **Vertex Qubits**: Each 24-cell vertex hosts a Bloch sphere
+- **GA Rotors as Gates**: X, Y, Z, H, S, T gates implemented as rotors
+- **Global Phillips Gate**: 4D bi-rotor applies coherent phase to all qubits
+- **Simulated Annealing**: Energy minimization for optimization
+
+See: [PHILLIPS_GATE_ARCHITECTURE.md](./PHILLIPS_GATE_ARCHITECTURE.md)
+
+---
+
+## 6. Module Dependency Graph
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       App.tsx                               │
+│                   (State Machine)                           │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+        ┌─────────────────┼─────────────────┐
+        │                 │                 │
+        ▼                 ▼                 ▼
+┌───────────────┐ ┌───────────────┐ ┌───────────────┐
+│ CaptureScreen │ │ CalibScreen   │ │ GhostView     │
+│ (60Hz Loop)   │ │ (Setup)       │ │ (Parallax)    │
+└───────┬───────┘ └───────────────┘ └───────────────┘
+        │
+        ▼
+┌───────────────────────────────────────────────────────────────┐
+│                    services/                                  │
+├───────────────┬───────────────┬───────────────┬──────────────┤
+│ cpeMath.ts    │ imageCompos.  │ geminiSvc.    │ packageSvc.  │
+│ (Physics)     │ (Render)      │ (AI Bridge)   │ (Export)     │
+└───────┬───────┴───────┬───────┴───────────────┴──────────────┘
+        │               │
+        ▼               ▼
+┌───────────────────────────────────────────────────────────────┐
+│                 Evolution Track 3 Modules                     │
+├───────────────┬───────────────┬───────────────┬──────────────┤
+│ Geometric     │ E8Projection  │ MoireEngine   │ PhillipsGate │
+│ Algebra       │ (Polytopes)   │ (Visual)      │ (Quantum)    │
+└───────────────┴───────────────┴───────────────┴──────────────┘
+```
+
+---
+
+## 7. Documentation Index
+
+| Document | Purpose |
+|----------|---------|
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | System overview (this file) |
+| [THEORY_OF_OPERATION.md](./THEORY_OF_OPERATION.md) | Physics principles |
+| [OPTO_ORTHO_GIMBAL.md](./OPTO_ORTHO_GIMBAL.md) | Gimbal compensation |
+| [SYSTEMS_MANIFEST.md](./SYSTEMS_MANIFEST.md) | Subsystem specifications |
+| [API_VARIABLES.md](./API_VARIABLES.md) | Constants and variables |
+| [USER_MANUAL.md](./USER_MANUAL.md) | End-user guide |
+| [ROADMAP.md](./ROADMAP.md) | Development roadmap |
+| [GEOMETRIC_ALGEBRA_PRIMER.md](./GEOMETRIC_ALGEBRA_PRIMER.md) | GA mathematics |
+| [MOIRE_VISUAL_COMPUTING.md](./MOIRE_VISUAL_COMPUTING.md) | Moiré theory |
+| [PHILLIPS_GATE_ARCHITECTURE.md](./PHILLIPS_GATE_ARCHITECTURE.md) | Quantum simulation |
+| [API_REFERENCE.md](./API_REFERENCE.md) | Complete API docs |
